@@ -12,6 +12,6 @@ export function FinishOverlay({ lineX, y0, y1, band }: { lineX: number; y0: numb
 }
 
 const styles = StyleSheet.create({
-  line: { position: 'absolute', top: 0, bottom: 0, width: 2, marginLeft: -1, backgroundColor: '#ff3b30' },
-  band: { position: 'absolute', borderWidth: 1, borderColor: '#ffcc00', backgroundColor: 'rgba(255,204,0,0.12)' },
+  line: { position: 'absolute', top: 0, bottom: 0, width: 4, marginLeft: -2, backgroundColor: '#FF7A3D' },
+  band: { position: 'absolute', borderWidth: 2, borderStyle: 'dashed', borderRadius: 6, borderColor: '#8CCBFF', backgroundColor: 'rgba(90,176,255,0.10)' },
 });

@@ -6,7 +6,7 @@ import { Home, type Route } from './src/screens/Home';
 import { SinglePhone } from './src/screens/SinglePhone';
 import { TwoPhoneFinish } from './src/screens/TwoPhoneFinish';
 import { TwoPhoneStart } from './src/screens/TwoPhoneStart';
-import { Btn, s } from './src/ui/kit';
+import { Btn, C, s } from './src/ui/kit';
 
 export default function App() {
   const [route, setRoute] = useState<Route>('home');
@@ -17,8 +17,9 @@ export default function App() {
   if (route !== 'home' && !hasPermission) {
     body = (
       <View style={[s.screen, s.pad, { justifyContent: 'center' }]}>
-        <Text style={s.label}>需要相機權限才能偵測衝線 / 起跑動作</Text>
-        <Btn title="允許相機" onPress={() => requestPermission()} />
+        <Text style={s.title}>需要相機權限</Text>
+        <Text style={[s.label, { color: C.dim, lineHeight: 24 }]}>用相機偵測衝線和起跑動作，影像只在手機上分析，不會上傳。</Text>
+        <Btn big title="允許相機" onPress={() => requestPermission()} />
         <Btn kind="ghost" title="返回" onPress={back} />
       </View>
     );
