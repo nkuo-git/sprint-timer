@@ -23,6 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # 版本號依上一個 Release 計算，同時只跑一個以免兩次建置拿到同一個版本號
+    concurrency:
+      group: android-release
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -35,9 +39,18 @@ jobs:
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
       - run: npm ci
+      - name: Compute version
+        id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V=$(gh api "repos/${{ github.repository }}/releases?per_page=100" | node scripts/next-version.mjs)
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "App version: $V (versionCode ${{ github.run_number }})"
       - run: npx expo prebuild --platform android --no-install
         env:
           BUILD_NUMBER: ${{ github.run_number }}
+          APP_VERSION: ${{ steps.ver.outputs.version }}
       - name: Build APK
         working-directory: android
         run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a
@@ -46,8 +59,9 @@ jobs:
           name: sprint-timer-android-apk
           path: android/app/build/outputs/apk/release/*.apk
           retention-days: 30
-      # main 分支每次建置都發一個 Release，APK 檔名固定為 sprint-timer.apk，
+      # main 分支每次建置都發一個 Release，標題是顯示版本 v0.N，APK 檔名固定為 sprint-timer.apk，
       # 所以最新版永遠是：https://github.com/<owner>/<repo>/releases/latest/download/sprint-timer.apk
+      # 標籤維持 build-<versionCode>：已安裝的舊版 App 靠這個格式判斷有沒有新版。
       - name: Publish release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
@@ -57,6 +71,6 @@ jobs:
           cp android/app/build/outputs/apk/release/app-release.apk sprint-timer.apk
           gh release create "build-${{ github.run_number }}" sprint-timer.apk \
             --target "${{ github.sha }}" \
-            --title "Android build ${{ github.run_number }}" \
+            --title "v${{ steps.ver.outputs.version }}" \
             --notes "自動建置：${COMMIT_MSG%%$'\n'*}" \
             --latest

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Modal, Pressable, Text, View } from 'react-native';
 import { Btn, C, NUM } from '../ui/kit';
-import { checkForUpdate, currentBuild, downloadAndInstall } from './updater';
+import { checkForUpdate, currentVersion, downloadAndInstall } from './updater';
 import type { ReleaseInfo } from './version';
 
 /**
@@ -54,7 +54,7 @@ export function UpdateSheet() {
           <View style={{ gap: 2 }}>
             <Text style={{ color: C.text, fontSize: 22, fontWeight: '900' }}>有新版本</Text>
             <Text style={[NUM, { color: C.dim, fontSize: 14 }]}>
-              build {currentBuild() ?? '?'} → build {rel.build}
+              v{currentVersion() ?? '?'} → v{rel.version}
             </Text>
           </View>
         </View>

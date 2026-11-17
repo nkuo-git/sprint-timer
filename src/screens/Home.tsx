@@ -1,6 +1,6 @@
 import React from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
-import { currentBuild } from '../update/updater';
+import { currentVersion } from '../update/updater';
 import { UpdateSheet } from '../update/UpdateBanner';
 import { C, s } from '../ui/kit';
 
@@ -8,7 +8,7 @@ export type Route = 'home' | 'start' | 'finish' | 'single';
 
 /** 設計稿「1 模式選擇」 */
 export function Home({ go }: { go(r: Route): void }) {
-  const build = currentBuild();
+  const version = currentVersion();
   return (
     <View style={s.screen}>
       <ScrollView contentContainerStyle={[s.pad, { gap: 24, flexGrow: 1 }]}>
@@ -47,7 +47,7 @@ export function Home({ go }: { go(r: Route): void }) {
         </Pressable>
 
         <View style={{ flex: 1 }} />
-        <Text style={{ color: C.faint, fontSize: 12, textAlign: 'center' }}>{build ? `build ${build}` : '開發版'}</Text>
+        <Text style={{ color: C.faint, fontSize: 12, textAlign: 'center' }}>{version ? `v${version}` : '開發版'}</Text>
       </ScrollView>
       <UpdateSheet />
     </View>

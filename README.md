@@ -20,3 +20,8 @@ App 使用原生模組（相機、精準時鐘），無法在 Expo Go 執行，�
 - Android：push 到 main 後 GitHub Actions 自動建置並發佈 Release。最新版固定連結：
   https://github.com/nkuo-git/sprint-timer/releases/latest/download/sprint-timer.apk
 - iOS：設定 `EXPO_TOKEN` secret 後手動執行 “iOS build (EAS)” workflow（需 Apple Developer 帳號）。
+
+## 版本號
+- 顯示版本 `主版.次版`（例如 v0.4），每次發佈次版 +1（`scripts/next-version.mjs` 依上一個 Release 計算）。
+- 主版在 `version.json`，只在需要時手動改；改了之後次版從 0 開始。
+- Release 標籤是 `build-<versionCode>`（GitHub Actions run number），App 內更新用它比較新舊。

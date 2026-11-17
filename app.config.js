@@ -1,10 +1,11 @@
-// 在 app.json 的基礎上動態設定版本號：CI 會傳入 BUILD_NUMBER（= GitHub Actions run number = Release 的 build-N）。
-// App 內更新就是比對這個數字和 GitHub 最新 Release 的 N。
+// 在 app.json 的基礎上動態設定版本號（CI 傳入）：
+//  - APP_VERSION：顯示給人看的版本 0.N（scripts/next-version.mjs 算出，每次發佈 +1）
+//  - BUILD_NUMBER：Android versionCode = GitHub Actions run number = Release 標籤 build-N，只會變大，App 內更新用它比較新舊
 module.exports = ({ config }) => {
   const build = Number(process.env.BUILD_NUMBER || 1);
   return {
     ...config,
-    version: `0.1.${build}`,
+    version: process.env.APP_VERSION || '0.0',
     ios: { ...config.ios, buildNumber: String(build) },
     android: {
       ...config.android,

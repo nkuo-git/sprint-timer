@@ -13,6 +13,12 @@ export function currentBuild(): number | null {
   return Number.isFinite(v) && v > 0 ? v : null;
 }
 
+/** 顯示版本，例如 "0.4"；本機開發版回傳 null */
+export function currentVersion(): string | null {
+  const v = Application.nativeApplicationVersion;
+  return v && v !== '0.0' ? v : null;
+}
+
 /** 查 GitHub 最新 Release，有比目前新的版本就回傳，否則 null。只支援 Android。 */
 export async function checkForUpdate(): Promise<ReleaseInfo | null> {
   if (Platform.OS !== 'android') return null;
