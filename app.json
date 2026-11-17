@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "短跑計時",
+    "slug": "sprint-timer",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "bundleIdentifier": "com.nkuo.sprinttimer",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSCameraUsageDescription": "用相機偵測跑者衝線與起跑動作",
+        "NSMicrophoneUsageDescription": "播放槍聲時使用低延遲音訊模式",
+        "NSLocalNetworkUsageDescription": "和另一支手機同步時鐘、傳送鳴槍時間",
+        "UIBackgroundModes": ["audio"]
+      }
+    },
+    "android": {
+      "package": "com.nkuo.sprinttimer",
+      "permissions": ["android.permission.CAMERA", "android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.ACCESS_WIFI_STATE", "android.permission.WAKE_LOCK"],
+      "adaptiveIcon": {
+        "backgroundColor": "#0f1115",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      }
+    },
+    "plugins": [
+      ["expo-build-properties", { "ios": { "deploymentTarget": "16.4" }, "android": { "minSdkVersion": 26 } }]
+    ]
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": { "modules": ["PrecisionClockModule"] },
+  "android": { "modules": ["expo.modules.precisionclock.PrecisionClockModule"] }
+}

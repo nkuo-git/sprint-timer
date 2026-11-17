@@ -1,0 +1,23 @@
+# iOS 需要 Apple Developer 帳號（付費）才能裝到實機。
+# 設定好 EXPO_TOKEN secret 後，在 Actions 頁面手動執行這個 workflow，
+# 會在 Expo 的雲端 macOS 機器上建置，完成後在 expo.dev 取得安裝連結。
+name: iOS build (EAS)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ios:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      - run: npm ci
+      - run: eas build --platform ios --profile preview --non-interactive --no-wait
