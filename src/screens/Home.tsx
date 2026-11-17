@@ -1,5 +1,6 @@
 import React from 'react';
 import { ScrollView, Text, View } from 'react-native';
+import { UpdateBanner } from '../update/UpdateBanner';
 import { Btn, Label, s } from '../ui/kit';
 
 export type Route = 'home' | 'start' | 'finish' | 'single';
@@ -9,6 +10,7 @@ export function Home({ go }: { go(r: Route): void }) {
     <ScrollView contentContainerStyle={[s.pad, { paddingTop: 64 }]} style={s.screen}>
       <Text style={[s.title, { fontSize: 28 }]}>短跑計時</Text>
       <Label dim>成績 = 衝線時間 − 鳴槍時間（含反應時間，和正式比賽一樣）</Label>
+      <UpdateBanner />
       <View style={s.card}>
         <Text style={s.title}>雙手機（最準）</Text>
         <Label dim>一支放起跑線發令，一支放終點用高速相機抓衝線。兩支手機需連同一個 Wi-Fi 或熱點。</Label>
