@@ -21,6 +21,8 @@ jobs:
   android-apk:
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -42,3 +44,16 @@ jobs:
           name: sprint-timer-android-apk
           path: android/app/build/outputs/apk/release/*.apk
           retention-days: 30
+      # main 分支每次建置都發一個 Release，APK 檔名固定為 sprint-timer.apk，
+      # 所以最新版永遠是：https://github.com/<owner>/<repo>/releases/latest/download/sprint-timer.apk
+      - name: Publish release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk sprint-timer.apk
+          gh release create "build-${{ github.run_number }}" sprint-timer.apk \
+            --target "${{ github.sha }}" \
+            --title "Android build ${{ github.run_number }}" \
+            --notes "自動建置：${{ github.event.head_commit.message }}" \
+            --latest

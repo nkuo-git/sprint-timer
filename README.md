@@ -17,5 +17,6 @@ npx expo prebuild   # 產生 android/ ios/ 原生專案
 App 使用原生模組（相機、精準時鐘），無法在 Expo Go 執行，需要自行建置的 dev client 或 APK。
 
 ## 雲端建置
-- Android：push 後 GitHub Actions 自動建置 APK，在 Actions → 該次執行 → Artifacts 下載。
+- Android：push 到 main 後 GitHub Actions 自動建置並發佈 Release。最新版固定連結：
+  https://github.com/nkuo-git/sprint-timer/releases/latest/download/sprint-timer.apk
 - iOS：設定 `EXPO_TOKEN` secret 後手動執行 “iOS build (EAS)” workflow（需 Apple Developer 帳號）。
