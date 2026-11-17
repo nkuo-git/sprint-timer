@@ -1,15 +1,11 @@
 import { useKeepAwake } from 'expo-keep-awake';
 import React, { useEffect, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import { PrecisionClock } from '../../modules/precision-clock';
-import type { Crossing } from '../core/finishLine';
 import { soundDelay } from '../core/physics';
-import { singlePhoneResult, type RaceResult } from '../core/result';
 import { defaultStartSequence, planStart } from '../core/startSequence';
-import { FinishCamera, defaultRegion, type FinishCameraHandle, type FinishRegion, type Telemetry } from '../camera/FinishCamera';
-import { RegionControls } from '../ui/RegionControls';
-import { BigStepper, Btn, C, ChoiceCard, Chip, Header, IconBtn, NUM, NumField, Segmented, SectionTitle, s } from '../ui/kit';
-import { ResultView, type RunRecord } from '../ui/ResultView';
+import { HandheldFinish, type HandheldHandle } from '../ui/HandheldFinish';
+import { BigStepper, Btn, C, ChoiceCard, Header, NUM, NumField, Segmented, SectionTitle, s } from '../ui/kit';
 import { sleep, sleepUntil, speak, type CommandLang } from './commands';
 
 /**
@@ -19,101 +15,71 @@ import { sleep, sleepUntil, speak, type CommandLang } from './commands';
  */
 export function SinglePhone({ onBack }: { onBack(): void }) {
   useKeepAwake();
-  const cam = useRef<FinishCameraHandle>(null);
-  const run = useRef<{ signalAt?: number; cross?: Crossing; signal: 'sound' | 'flash' } | null>(null);
+  const hh = useRef<HandheldHandle>(null);
+  const run = useRef<object | null>(null);
   const [signal, setSignal] = useState<'sound' | 'flash'>('sound');
   const [distance, setDistance] = useState(100);
   const [tempC, setTempC] = useState(20);
   const [lang, setLang] = useState<CommandLang>('zh');
-  const [region, setRegion] = useState<FinishRegion>(defaultRegion);
-  const [fps, setFps] = useState(240);
   const [torch, setTorch] = useState(false);
-  const [tele, setTele] = useState<Telemetry | null>(null);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<RaceResult | null>(null);
+  const [startAt, setStartAt] = useState<number | null>(null);
+  const [raceNo, setRaceNo] = useState(1);
 
   useEffect(() => {
     PrecisionClock.prepareAudio().catch((e) => setStatus(`音訊初始化失敗：${e.message}`));
   }, []);
 
-  const finish = () => {
-    const r = run.current;
-    if (!r || r.signalAt === undefined || !r.cross) return;
-    setResult(
-      singlePhoneResult({ signalAt: r.signalAt, crossAt: r.cross.t, signal: r.signal, distanceM: distance, tempC, frameInterval: r.cross.frameInterval }),
-    );
-    setBusy(false);
-  };
-
   const start = async () => {
     const now = PrecisionClock.now;
+    if (!hh.current?.arm()) {
+      setStatus('先點一下畫面上的終點線');
+      return;
+    }
+    const mine = {};
+    run.current = mine;
     setBusy(true);
-    setResult(null);
-    run.current = { signal };
+    setStartAt(null);
     const plan = planStart(defaultStartSequence);
     const t0 = now();
-    // 背景學習：此時跑者在起點，終點線是空的
-    cam.current?.learnAndArm();
-    setStatus('學習背景中（終點線請淨空）');
+    // 背景學習在 arm() 時進行：此時跑者在起點，終點線是空的
+    setStatus('準備中');
     await sleepUntil(now, t0 + plan.marks);
+    if (run.current !== mine) return;
     setStatus('各就位');
     speak('marks', lang);
     await sleepUntil(now, t0 + plan.set);
+    if (run.current !== mine) return;
     setStatus('預備');
     speak('set', lang);
+    let signalAt: number;
     if (signal === 'sound') {
       const gun = await PrecisionClock.playGunAt(t0 + plan.gun);
-      run.current.signalAt = gun.emittedAt;
+      signalAt = gun.emittedAt + soundDelay(distance, tempC);
     } else {
       await sleepUntil(now, t0 + plan.gun);
-      run.current.signalAt = now();
+      if (run.current !== mine) return;
+      signalAt = now();
       setTorch(true);
       sleep(400).then(() => setTorch(false));
     }
-    setStatus('計時中');
-    finish();
+    if (run.current !== mine) return;
+    setStartAt(signalAt);
   };
 
-  const onCross = (c: Crossing) => {
-    if (!run.current) return;
-    run.current.cross = c;
-    setStatus(`偵測到衝線（${c.method}）`);
-    finish();
+  const cancel = () => {
+    run.current = null;
+    hh.current?.stop();
+    setBusy(false);
+    setStartAt(null);
+    setStatus('');
   };
 
   const [step, setStep] = useState<'setup' | 'camera'>('setup');
   const [custom, setCustom] = useState(false);
-  const [adjust, setAdjust] = useState(false);
-  const [history, setHistory] = useState<RunRecord[]>([]);
-  const counted = useRef<RaceResult | null>(null);
-
-  useEffect(() => {
-    if (!result || counted.current === result) return;
-    counted.current = result;
-    setHistory((h) => [...h, { n: h.length + 1, raw: result.raw }]);
-  }, [result]);
-
   const compMs = signal === 'sound' ? soundDelay(distance, tempC) : 0;
   const context = `${distance}m · 單手機 · ${signal === 'sound' ? '槍聲' : '閃光'}`;
-
-  if (result) {
-    return (
-      <ResultView
-        raw={result.raw}
-        uncertainty={result.uncertainty}
-        cameraFps={tele?.fps}
-        context={context}
-        history={history}
-        notes={result.notes}
-        onAgain={() => {
-          setResult(null);
-          setStatus('');
-        }}
-        onHome={onBack}
-      />
-    );
-  }
 
   if (step === 'setup') {
     return (
@@ -177,57 +143,32 @@ export function SinglePhone({ onBack }: { onBack(): void }) {
   }
 
   return (
-    <View style={[s.screen, { backgroundColor: '#000' }]}>
-      <View style={{ flex: 1 }}>
-        <FinishCamera ref={cam} region={region} targetFps={fps} torch={torch} onCross={onCross} onTelemetry={setTele} />
-        <View style={styles.hud} pointerEvents="box-none">
-          <IconBtn translucent label="回到設定" glyph="‹" onPress={() => !busy && setStep('setup')} />
-          <View style={[s.wrap, { flex: 1, justifyContent: 'flex-end' }]}>
-            <Chip tone="overlay" text={tele ? `${tele.fps.toFixed(0)} fps` : `${fps} fps`} />
-            <Chip tone="overlay" text={context} />
-          </View>
-        </View>
-      </View>
-      <View style={styles.sheet}>
-        <ScrollView contentContainerStyle={{ gap: 14 }} style={{ maxHeight: adjust ? 420 : undefined }}>
-          <View style={[s.row, { justifyContent: 'space-between' }]}>
-            <Text style={{ color: busy ? C.text : C.dim, fontSize: 20, fontWeight: '700', flex: 1 }}>{status || '架好手機後按開始'}</Text>
-            <Text style={{ color: C.dim, fontSize: 13 }}>{tele ? `偵測器：${tele.phase}` : '相機啟動中…'}</Text>
-          </View>
-          {busy ? (
-            <Btn
-              big
-              kind="danger"
-              title="取消這趟"
-              onPress={() => {
-                cam.current?.stop();
-                run.current = null;
-                setBusy(false);
-                setStatus('已取消');
-              }}
-            />
-          ) : (
-            <Btn big title="開始口令" onPress={start} />
-          )}
-          <View style={[s.row, { gap: 8 }]}>
-            <Btn kind="ghost" title={adjust ? '完成調整' : '調整終點線'} onPress={() => setAdjust(!adjust)} style={{ flex: 1 }} textStyle={{ fontSize: 15 }} />
-          </View>
-          {adjust ? (
-            <>
-              <SectionTitle>相機 fps</SectionTitle>
-              <Segmented<number> options={[240, 120, 60]} value={fps} onChange={setFps} fmt={(f) => `${f}fps`} />
-              <RegionControls region={region} onChange={setRegion} />
-            </>
-          ) : (
-            <Text style={s.note}>手機架腳架，放在終點線延長線、跑道外側，鏡頭垂直對跑道。開始後會先學習背景，終點線請淨空。</Text>
-          )}
-        </ScrollView>
-      </View>
-    </View>
+    <HandheldFinish
+      ref={hh}
+      onBack={() => {
+        cancel();
+        setStep('setup');
+      }}
+      context={context}
+      raceNo={raceNo}
+      fps={240}
+      torch={torch}
+      startAt={startAt}
+      status={status}
+      resultNote={signal === 'flash' ? '閃光起跑：看光起跑通常比聽槍聲慢 30–50ms，成績會略慢。' : `已扣除聲音傳到起點的時間 ${compMs.toFixed(3)} s。`}
+      onAgain={() => {
+        setBusy(false);
+        setStartAt(null);
+        setStatus('');
+        setRaceNo((n) => n + 1);
+      }}
+      waitControls={<Btn big kind="danger" title="取消這趟" onPress={cancel} />}
+      idleControls={(locked) => (
+        <>
+          {status && !busy ? <Text style={{ color: C.warn, fontSize: 14 }}>{status}</Text> : null}
+          <Btn big title="開始口令" onPress={start} disabled={!locked} />
+        </>
+      )}
+    />
   );
 }
-
-const styles = StyleSheet.create({
-  hud: { position: 'absolute', left: 16, right: 16, top: 52, flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  sheet: { backgroundColor: C.bg, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 18, paddingHorizontal: 20, paddingBottom: 28, marginTop: -24 },
-});
