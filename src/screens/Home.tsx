@@ -1,27 +1,67 @@
 import React from 'react';
-import { ScrollView, Text, View } from 'react-native';
-import { UpdateBanner } from '../update/UpdateBanner';
-import { Btn, Label, s } from '../ui/kit';
+import { Pressable, ScrollView, Text, View } from 'react-native';
+import { currentBuild } from '../update/updater';
+import { UpdateSheet } from '../update/UpdateBanner';
+import { C, s } from '../ui/kit';
 
 export type Route = 'home' | 'start' | 'finish' | 'single';
 
+/** 設計稿「1 模式選擇」 */
 export function Home({ go }: { go(r: Route): void }) {
+  const build = currentBuild();
   return (
-    <ScrollView contentContainerStyle={[s.pad, { paddingTop: 64 }]} style={s.screen}>
-      <Text style={[s.title, { fontSize: 28 }]}>短跑計時</Text>
-      <Label dim>成績 = 衝線時間 − 鳴槍時間（含反應時間，和正式比賽一樣）</Label>
-      <UpdateBanner />
-      <View style={s.card}>
-        <Text style={s.title}>雙手機（最準）</Text>
-        <Label dim>一支放起跑線發令，一支放終點用高速相機抓衝線。兩支手機需連同一個 Wi-Fi 或熱點。</Label>
-        <Btn title="這支是起跑手機" onPress={() => go('start')} />
-        <Btn title="這支是終點手機" onPress={() => go('finish')} />
-      </View>
-      <View style={s.card}>
-        <Text style={s.title}>單手機</Text>
-        <Label dim>手機放終點，自己鳴槍（自動扣除聲音傳遞時間）或閃光起跑。</Label>
-        <Btn title="單手機模式" onPress={() => go('single')} />
-      </View>
-    </ScrollView>
+    <View style={s.screen}>
+      <ScrollView contentContainerStyle={[s.pad, { gap: 24, flexGrow: 1 }]}>
+        <View style={{ gap: 4 }}>
+          <Text style={{ color: C.dim, fontSize: 13, letterSpacing: 1.5 }}>SPRINT TIMER</Text>
+          <Text style={{ color: C.text, fontSize: 30, fontWeight: '900' }}>短跑計時</Text>
+        </View>
+        <Text style={{ color: C.dim, fontSize: 16, lineHeight: 25 }}>選擇計時方式。成績從鳴槍起算，包含反應時間。</Text>
+
+        <View style={[s.card, { borderRadius: 20, padding: 20, gap: 14, borderWidth: 2, borderColor: C.accent }]}>
+          <View style={[s.row, { justifyContent: 'space-between' }]}>
+            <Text style={{ color: C.text, fontSize: 22, fontWeight: '700' }}>雙手機</Text>
+            <View style={{ backgroundColor: C.accent, borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 }}>
+              <Text style={{ color: C.onAccent, fontSize: 13, fontWeight: '700' }}>最準 ±5ms</Text>
+            </View>
+          </View>
+          <Text style={{ color: C.soft, fontSize: 15, lineHeight: 24 }}>一支在起點鳴槍，一支在終點拍衝線。可測反應時間、判斷搶跑。兩支手機要連同一個 Wi-Fi 或熱點。</Text>
+          <View style={[s.row, { gap: 10 }]}>
+            <Tile title="這支當起點" onPress={() => go('start')} />
+            <Tile title="這支當終點" onPress={() => go('finish')} />
+          </View>
+        </View>
+
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => go('single')}
+          style={({ pressed }) => [s.card, { borderRadius: 20, padding: 20, gap: 14, borderWidth: 1, borderColor: C.line }, pressed && { opacity: 0.8 }]}
+        >
+          <View style={[s.row, { justifyContent: 'space-between' }]}>
+            <Text style={{ color: C.text, fontSize: 22, fontWeight: '700' }}>單手機</Text>
+            <View style={{ borderWidth: 1, borderColor: C.info, borderRadius: 999, paddingVertical: 3, paddingHorizontal: 10 }}>
+              <Text style={{ color: C.info, fontSize: 13, fontWeight: '700' }}>一個人就能用</Text>
+            </View>
+          </View>
+          <Text style={{ color: C.soft, fontSize: 15, lineHeight: 24 }}>手機放終點，自己發令、自己拍衝線。自動扣除聲音傳到起點的時間。</Text>
+        </Pressable>
+
+        <View style={{ flex: 1 }} />
+        <Text style={{ color: C.faint, fontSize: 12, textAlign: 'center' }}>{build ? `build ${build}` : '開發版'}</Text>
+      </ScrollView>
+      <UpdateSheet />
+    </View>
+  );
+}
+
+function Tile({ title, onPress }: { title: string; onPress(): void }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [{ flex: 1, minHeight: 56, borderRadius: 12, backgroundColor: C.raised, alignItems: 'center', justifyContent: 'center' }, pressed && { opacity: 0.7 }]}
+    >
+      <Text style={{ color: C.text, fontSize: 16, fontWeight: '700' }}>{title}</Text>
+    </Pressable>
   );
 }
