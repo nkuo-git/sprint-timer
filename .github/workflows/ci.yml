@@ -47,6 +47,18 @@ jobs:
           V=$(gh api "repos/${{ github.repository }}/releases?per_page=100" | node scripts/next-version.mjs)
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "App version: $V (versionCode ${{ github.run_number }})"
+      # 手錶版（Wear OS）起點機：獨立的原生專案，版本號和手機 App 同一組。放在手機建置前面，有錯可以早點知道。
+      - name: Watch app unit tests
+        working-directory: wear
+        run: ./gradlew :core:test --no-daemon
+      - name: Build watch APK
+        working-directory: wear
+        run: ./gradlew :app:assembleRelease --no-daemon -PappVersion=${{ steps.ver.outputs.version }} -PbuildNumber=${{ github.run_number }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sprint-timer-wear-apk
+          path: wear/app/build/outputs/apk/release/*.apk
+          retention-days: 30
       - run: npx expo prebuild --platform android --no-install
         env:
           BUILD_NUMBER: ${{ github.run_number }}
@@ -61,6 +73,7 @@ jobs:
           retention-days: 30
       # main 分支每次建置都發一個 Release，標題是顯示版本 v0.N，APK 檔名固定為 sprint-timer.apk，
       # 所以最新版永遠是：https://github.com/<owner>/<repo>/releases/latest/download/sprint-timer.apk
+      # 手錶版同一個 Release，檔名固定為 sprint-timer-wear.apk。
       # 標籤維持 build-<versionCode>：已安裝的舊版 App 靠這個格式判斷有沒有新版。
       - name: Publish release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -69,7 +82,8 @@ jobs:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
           cp android/app/build/outputs/apk/release/app-release.apk sprint-timer.apk
-          gh release create "build-${{ github.run_number }}" sprint-timer.apk \
+          cp wear/app/build/outputs/apk/release/app-release.apk sprint-timer-wear.apk
+          gh release create "build-${{ github.run_number }}" sprint-timer.apk sprint-timer-wear.apk \
             --target "${{ github.sha }}" \
             --title "v${{ steps.ver.outputs.version }}" \
             --notes "自動建置：${COMMIT_MSG%%$'\n'*}" \
