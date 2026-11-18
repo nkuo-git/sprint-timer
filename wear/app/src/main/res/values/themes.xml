@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- 純黑底；畫面間的滑動返回由 App 自己處理（設定頁滑回主畫面），所以關掉系統的滑動關閉 -->
+  <style name="AppTheme" parent="@android:style/Theme.DeviceDefault">
+    <item name="android:windowBackground">@android:color/black</item>
+    <item name="android:windowSwipeToDismiss">false</item>
+    <item name="android:windowNoTitle">true</item>
+  </style>
+</resources>
