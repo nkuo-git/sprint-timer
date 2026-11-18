@@ -1,0 +1,10 @@
+<!-- App 圖示（iOS／通用）：跑道＋橘色終點線。座標沿用 Android 自適應圖示的 108 單位，這裡裁中間 88 單位。 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="10 10 88 88">
+  <rect x="10" y="10" width="88" height="88" fill="#0E1116"/>
+  <g transform="rotate(-12 54 54)">
+    <rect x="27" y="37" width="54" height="34" rx="17" fill="none" stroke="#FFFFFF" stroke-width="8"/>
+    <rect x="27" y="37" width="54" height="34" rx="17" fill="none" stroke="#0E1116" stroke-width="1.5"/>
+    <path d="M62 66V76" fill="none" stroke="#0E1116" stroke-width="10.5"/>
+    <path d="M62 61V81" fill="none" stroke="#FF7A3D" stroke-width="6" stroke-linecap="round"/>
+  </g>
+</svg>

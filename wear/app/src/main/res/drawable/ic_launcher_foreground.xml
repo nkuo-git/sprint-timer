@@ -1,16 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 圖示：橘色圓（鳴槍）加三條放射線。安全區在中間 66dp 內。 -->
+<!-- 圖示：跑道（白）加橘色終點線，和手機版同一個圖形（assets/logo/android-foreground.svg）。安全區在中間 66dp 內。 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
   android:width="108dp"
   android:height="108dp"
   android:viewportWidth="108"
   android:viewportHeight="108">
-  <path
-    android:fillColor="#FF7A3D"
-    android:pathData="M54,54m-13,0a13,13 0,1 1,26 0a13,13 0,1 1,-26 0" />
-  <path
-    android:strokeColor="#FF7A3D"
-    android:strokeWidth="5"
-    android:strokeLineCap="round"
-    android:pathData="M54,30L54,25M74.8,42L79.1,39.5M33.2,42L28.9,39.5M74.8,66L79.1,68.5M33.2,66L28.9,68.5M54,78L54,83" />
+  <group
+    android:pivotX="54"
+    android:pivotY="54"
+    android:rotation="-12">
+    <!-- 跑道 -->
+    <path
+      android:strokeColor="#FFFFFF"
+      android:strokeWidth="8"
+      android:pathData="M44,37H64A17,17 0,0 1,64 71H44A17,17 0,0 1,44 37Z" />
+    <!-- 跑道分隔線 -->
+    <path
+      android:strokeColor="#0E1116"
+      android:strokeWidth="1.5"
+      android:pathData="M44,37H64A17,17 0,0 1,64 71H44A17,17 0,0 1,44 37Z" />
+    <!-- 終點線兩側留空 -->
+    <path
+      android:strokeColor="#0E1116"
+      android:strokeWidth="10.5"
+      android:pathData="M62,66V76" />
+    <!-- 終點線 -->
+    <path
+      android:strokeColor="#FF7A3D"
+      android:strokeWidth="6"
+      android:strokeLineCap="round"
+      android:pathData="M62,61V81" />
+  </group>
 </vector>
