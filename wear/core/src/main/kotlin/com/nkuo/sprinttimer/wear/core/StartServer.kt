@@ -154,11 +154,13 @@ class StartServer(
     return true
   }
 
-  /** UDP 可能掉封包：重要訊息重送 [times] 次（終點用 raceId 去重） */
+  /**
+   * UDP 可能掉封包：重要訊息重送 [times] 次（終點用 raceId 去重）。
+   * 全部在背景執行緒送，所以可以從主執行緒呼叫（Android 不准在主執行緒做網路存取）。
+   */
   fun sendReliable(m: Msg, times: Int = 4, gapMs: Long = 40) {
-    send(m)
     val ex = resender ?: return
-    for (i in 1 until times) {
+    for (i in 0 until times) {
       try {
         ex.schedule({ send(m) }, i * gapMs, TimeUnit.MILLISECONDS)
       } catch (e: RuntimeException) {
