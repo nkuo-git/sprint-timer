@@ -1,0 +1,12 @@
+<!-- Android 單色主題圖示：只看透明度，所以跑道分隔線和終點線旁的缺口用遮罩挖空。 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="432" height="432" viewBox="0 0 108 108">
+  <mask id="track" maskUnits="userSpaceOnUse" x="0" y="0" width="108" height="108">
+    <g transform="rotate(-12 54 54)">
+      <rect x="27" y="37" width="54" height="34" rx="17" fill="none" stroke="#FFFFFF" stroke-width="8"/>
+      <rect x="27" y="37" width="54" height="34" rx="17" fill="none" stroke="#000000" stroke-width="1.5"/>
+      <path d="M62 66V76" fill="none" stroke="#000000" stroke-width="10.5"/>
+    </g>
+  </mask>
+  <rect width="108" height="108" fill="#FFFFFF" mask="url(#track)"/>
+  <path d="M62 61V81" fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round" transform="rotate(-12 54 54)"/>
+</svg>

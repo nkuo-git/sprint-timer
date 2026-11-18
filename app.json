@@ -20,7 +20,7 @@
       "package": "com.nkuo.sprinttimer",
       "permissions": ["android.permission.CAMERA", "android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.ACCESS_WIFI_STATE", "android.permission.WAKE_LOCK"],
       "adaptiveIcon": {
-        "backgroundColor": "#0f1115",
+        "backgroundColor": "#0E1116",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
