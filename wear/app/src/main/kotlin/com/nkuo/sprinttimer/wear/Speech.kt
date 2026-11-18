@@ -46,7 +46,7 @@ class Speech(context: Context) : Announcer {
       CommandLang.EN -> if (cmd == Command.MARKS) "On your marks" else "Set"
     }
     try {
-      tts.language = loc
+      tts.setLanguage(loc)
       tts.setSpeechRate(0.9f)
       val params = Bundle().apply {
         putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
