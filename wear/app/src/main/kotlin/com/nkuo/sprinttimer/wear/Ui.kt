@@ -246,7 +246,7 @@ fun App(vm: StartDeviceViewModel, onExit: () -> Unit) {
       backgroundKey = behind ?: "exit",
       contentKey = screen,
       // 口令進行中不能滑掉，避免誤觸
-      userSwipeEnabled = screen != Screen.SEQUENCE,
+      hasBackground = screen != Screen.SEQUENCE,
     ) { isBackground ->
       when (if (isBackground) behind else screen) {
         Screen.NO_SPEAKER -> NoSpeakerScreen()
