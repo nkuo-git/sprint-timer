@@ -11,6 +11,10 @@
   <!-- 口令進行中不讓手錶睡著 -->
   <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+  <!-- App 內更新：下載新版後交給系統安裝；Android 12 以上 App 更新自己可以不用再按確認 -->
+  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+  <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+
   <!-- 用系統的語音合成喊口令 -->
   <queries>
     <intent>
@@ -39,5 +43,10 @@
         <category android:name="android.intent.category.LAUNCHER" />
       </intent-filter>
     </activity>
+
+    <!-- 收系統回報的安裝結果 -->
+    <receiver
+      android:name=".UpdateReceiver"
+      android:exported="false" />
   </application>
 </manifest>

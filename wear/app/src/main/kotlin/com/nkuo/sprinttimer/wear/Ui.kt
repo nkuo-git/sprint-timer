@@ -62,11 +62,12 @@ import com.nkuo.sprinttimer.wear.core.Phase
 import com.nkuo.sprinttimer.wear.core.StartState
 import com.nkuo.sprinttimer.wear.core.formatOfficial
 import com.nkuo.sprinttimer.wear.core.formatRaw
+import com.nkuo.sprinttimer.wear.core.formatSize
 import kotlin.math.ceil
 
 /**
  * 手錶起點機的畫面。
- * 設計稿：Claude Design「短跑計時 App 介面」畫面 10–14 https://claude.ai/artifact/UXK5fTNCPcaz6D5CiXfARX
+ * 設計稿：Claude Design「短跑計時 App 介面」畫面 10–15 https://claude.ai/artifact/UXK5fTNCPcaz6D5CiXfARX
  * 設計稿把 192dp 的圓形錶面畫成 384px（2 倍），這裡所有尺寸都直接寫設計稿的 px，再依實際錶面大小縮放。
  * 顏色沿用手機版（src/ui/kit.tsx），只有底色改純黑（手錶省電）。
  */
@@ -205,7 +206,7 @@ private fun Face(padH: Number = 40, padV: Number = 40, gap: Number = 8, content:
   }
 }
 
-private enum class Screen { NO_SPEAKER, NO_WIFI, CONNECT, READY, SETTINGS, SEQUENCE, RESULT }
+private enum class Screen { NO_SPEAKER, NO_WIFI, CONNECT, READY, SETTINGS, SEQUENCE, RESULT, UPDATE }
 
 @Composable
 fun App(vm: StartDeviceViewModel, onExit: () -> Unit) {
@@ -213,6 +214,7 @@ fun App(vm: StartDeviceViewModel, onExit: () -> Unit) {
   val unit = minOf(cfg.screenWidthDp, cfg.screenHeightDp) / 192f
   var showSettings by rememberSaveable { mutableStateOf(false) }
   val race = vm.race
+  val update = vm.update
 
   // 待命時最底下那一層：還沒連線顯示 IP，連上了（或選了只發令）顯示開始鈕
   val waiting = if (vm.ip == null) Screen.NO_WIFI else Screen.CONNECT
@@ -221,11 +223,16 @@ fun App(vm: StartDeviceViewModel, onExit: () -> Unit) {
     !vm.hasSpeaker -> Screen.NO_SPEAKER
     race.phase == Phase.COUNTDOWN || race.phase == Phase.MARKS || race.phase == Phase.SET || race.phase == Phase.GUN -> Screen.SEQUENCE
     race.phase == Phase.RESULT || race.phase == Phase.NO_RESULT -> Screen.RESULT
+    // 更新只在待命時出現，不打斷進行中的一趟
+    update != UpdateUi.None -> Screen.UPDATE
     showSettings -> Screen.SETTINGS
     else -> home
   }
+  // 下載和安裝途中不能滑掉
+  val updateBusy = update is UpdateUi.Downloading || update is UpdateUi.Installing
   // 往右滑會回到哪一個畫面；null = 離開 App
   val behind = when {
+    screen == Screen.UPDATE -> if (updateBusy) null else home
     screen == Screen.SETTINGS -> home
     screen == Screen.READY && vm.solo && !race.connected -> waiting
     else -> null
@@ -235,6 +242,7 @@ fun App(vm: StartDeviceViewModel, onExit: () -> Unit) {
     SwipeToDismissBox(
       onDismissed = {
         when {
+          screen == Screen.UPDATE -> vm.dismissUpdate()
           screen == Screen.SETTINGS -> showSettings = false
           behind != null -> vm.solo = false
           else -> onExit()
@@ -246,7 +254,7 @@ fun App(vm: StartDeviceViewModel, onExit: () -> Unit) {
       backgroundKey = behind ?: "exit",
       contentKey = screen,
       // 口令進行中不能滑掉，避免誤觸
-      hasBackground = screen != Screen.SEQUENCE,
+      hasBackground = screen != Screen.SEQUENCE && !(screen == Screen.UPDATE && updateBusy),
     ) { isBackground ->
       when (if (isBackground) behind else screen) {
         Screen.NO_SPEAKER -> NoSpeakerScreen()
@@ -256,6 +264,7 @@ fun App(vm: StartDeviceViewModel, onExit: () -> Unit) {
         Screen.SETTINGS -> SettingsScreen(vm)
         Screen.SEQUENCE -> SequenceScreen(race, now = vm::now, onCancel = vm::cancel, onStopWaiting = vm::next)
         Screen.RESULT -> ResultScreen(race, onAgain = vm::next)
+        Screen.UPDATE -> UpdateScreen(update, vm.currentVersion, onUpdate = vm::startUpdate, onLater = vm::dismissUpdate)
         null -> Box(Modifier.fillMaxSize().background(C.bg))
       }
     }
@@ -452,6 +461,82 @@ private fun ResultScreen(race: StartState, onAgain: () -> Unit) {
       Txt("終點沒有回傳。可能斷線，或沒偵測到衝線。", 22, C.soft, lineHeight = 1.35f)
       Spacer(Modifier.height(px(0)))
       PrimaryButton("再一次", onAgain)
+    }
+  }
+}
+
+// ---------- 畫面 15：App 內更新 ----------
+
+/** 文字按鈕（沒有底色），用在次要的「稍後」 */
+@Composable
+private fun TextButton(label: String, onClick: () -> Unit) =
+  PillButton(label, onClick, C.bg, C.soft, 56, 28, 22, FontWeight.Medium)
+
+@Composable
+private fun UpdateScreen(update: UpdateUi, currentVersion: String, onUpdate: () -> Unit, onLater: () -> Unit) {
+  when (update) {
+    is UpdateUi.Offer -> Face(gap = 4) {
+      Txt("有新版本", 22, C.infoText)
+      Txt("v${update.release.version}", 60, C.text, FontWeight.Bold, tabular = true, lineHeight = 1.1f, maxLines = 1)
+      val size = if (update.release.sizeBytes > 0) " · ${formatSize(update.release.sizeBytes)}" else ""
+      Txt("目前 v$currentVersion$size", 22, C.dim, maxLines = 1)
+      Spacer(Modifier.height(px(4)))
+      PrimaryButton("更新", onUpdate, padH = 52)
+      TextButton("稍後", onLater)
+    }
+    is UpdateUi.Downloading -> RingFace(update.fraction) {
+      Txt("下載 v${update.release.version}", 22, C.dim, maxLines = 1)
+      Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(px(4))) {
+        Txt((update.fraction * 100).toInt().toString(), 112, C.text, FontWeight.Bold, tabular = true, lineHeight = 1.1f, maxLines = 1)
+        Txt("%", 30, C.soft, FontWeight.Bold, modifier = Modifier.padding(bottom = px(20)))
+      }
+      Txt("請讓 App 保持開著", 22, C.soft)
+    }
+    is UpdateUi.Installing -> RingFace(1f) {
+      Txt("安裝中…", 44, C.text, FontWeight.Black)
+      Spacer(Modifier.height(px(8)))
+      Txt("App 會自己關掉。\n裝好後請再打開一次。", 22, C.soft, lineHeight = 1.35f)
+    }
+    is UpdateUi.Failed -> Face(gap = 8) {
+      Txt("更新失敗", 34, C.warn, FontWeight.Black)
+      Txt(
+        if (update.installBlocked) "這支手錶不讓 App 自己安裝。請改用手機的安裝工具更新。" else "下載失敗。請確認手錶連得上網路。",
+        22,
+        C.soft,
+        lineHeight = 1.35f,
+      )
+      PrimaryButton("再試一次", onUpdate, minHeight = 72, padH = 36, textSize = 24)
+      TextButton("稍後", onLater)
+    }
+    UpdateUi.None -> Box(Modifier.fillMaxSize().background(C.bg))
+  }
+}
+
+/** 外圈有進度環的畫面（下載、安裝） */
+@Composable
+private fun RingFace(fraction: Float, content: @Composable () -> Unit) {
+  val strokePx = with(LocalDensity.current) { px(10).toPx() }
+  val insetPx = with(LocalDensity.current) { px(8).toPx() }
+  Box(Modifier.fillMaxSize().background(C.bg), contentAlignment = Alignment.Center) {
+    Canvas(Modifier.fillMaxSize()) {
+      val r = size.minDimension / 2 - insetPx
+      drawCircle(color = C.raised, radius = r, style = Stroke(width = strokePx))
+      drawArc(
+        color = C.info,
+        startAngle = -90f,
+        sweepAngle = 360f * fraction.coerceIn(0f, 1f),
+        useCenter = false,
+        topLeft = Offset(center.x - r, center.y - r),
+        size = Size(r * 2, r * 2),
+        style = Stroke(width = strokePx, cap = StrokeCap.Round),
+      )
+    }
+    Column(
+      modifier = Modifier.padding(px(40)),
+      verticalArrangement = Arrangement.spacedBy(px(2), Alignment.CenterVertically),
+      horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+      content()
     }
   }
 }

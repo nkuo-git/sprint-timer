@@ -12,10 +12,27 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import com.nkuo.sprinttimer.wear.core.Phase
 import com.nkuo.sprinttimer.wear.core.RaceController
+import com.nkuo.sprinttimer.wear.core.ReleaseInfo
 import com.nkuo.sprinttimer.wear.core.StartSequenceConfig
 import com.nkuo.sprinttimer.wear.core.StartServer
 import com.nkuo.sprinttimer.wear.core.StartState
 import expo.modules.precisionclock.shared.GunPlayer
+import kotlin.concurrent.thread
+
+/** App 內更新的進度 */
+sealed interface UpdateUi {
+  data object None : UpdateUi
+
+  /** 有新版，等使用者決定 */
+  data class Offer(val release: ReleaseInfo) : UpdateUi
+
+  data class Downloading(val release: ReleaseInfo, val fraction: Float) : UpdateUi
+
+  data class Installing(val release: ReleaseInfo) : UpdateUi
+
+  /** [installBlocked]：檔案下載好了但手錶不讓 App 自己安裝；false = 下載失敗 */
+  data class Failed(val release: ReleaseInfo, val installBlocked: Boolean) : UpdateUi
+}
 
 /**
  * 手錶起點機的全部狀態：Wi-Fi、和終點手機的連線、一趟的流程、設定。畫面只讀這裡的狀態、呼叫這裡的動作。
@@ -49,8 +66,13 @@ class StartDeviceViewModel(app: Application) : AndroidViewModel(app) {
       server.stop()
       server.forgetPeer()
     }
-    main.post { this.ip = if (network != null) ip else null }
+    main.post {
+      this.ip = if (network != null) ip else null
+      // 剛連上 Wi-Fi：之前沒查成更新的話再查一次
+      if (network != null) checkForUpdate()
+    }
   }
+  private val updater = Updater(app)
 
   /** 一趟的狀態（階段、第幾趟、終點有沒有連線、成績） */
   var race by mutableStateOf(StartState())
@@ -73,11 +95,88 @@ class StartDeviceViewModel(app: Application) : AndroidViewModel(app) {
   var leadInSec by mutableStateOf(prefs.getInt("leadIn", 5).coerceIn(LEAD_IN_MIN, LEAD_IN_MAX))
     private set
 
+  /** App 內更新的狀態。只在待命時顯示，不會打斷進行中的一趟。 */
+  var update by mutableStateOf<UpdateUi>(UpdateUi.None)
+    private set
+
+  /** 目前安裝的顯示版本，例如 "0.6" */
+  val currentVersion: String get() = updater.currentVersion
+
   private var savedVolume: Int? = null
+  private var updateChecked = false
+  private var updateChecking = false
 
   init {
     speech.lang = lang
     wifi.start()
+    UpdateReceiver.onInstallFailed = { main.post { onInstallFailed() } }
+    checkForUpdate()
+  }
+
+  /** 查有沒有新版。每次開 App 查到一次結果為止；沒網路就安靜地略過。 */
+  private fun checkForUpdate() {
+    if (updateChecked || updateChecking) return
+    updateChecking = true
+    thread(name = "update-check", isDaemon = true) {
+      val result = try {
+        Result.success(updater.check())
+      } catch (e: Exception) {
+        Result.failure(e)
+      }
+      main.post {
+        updateChecking = false
+        if (result.isSuccess) {
+          updateChecked = true
+          val rel = result.getOrNull()
+          if (rel != null && update == UpdateUi.None) update = UpdateUi.Offer(rel)
+        }
+      }
+    }
+  }
+
+  /** 按「更新」或「再試一次」：下載並安裝 */
+  fun startUpdate() {
+    val rel = when (val u = update) {
+      is UpdateUi.Offer -> u.release
+      is UpdateUi.Failed -> u.release
+      else -> return
+    }
+    update = UpdateUi.Downloading(rel, 0f)
+    thread(name = "update-download", isDaemon = true) {
+      var lastShown = -1
+      val file = try {
+        updater.download(rel) { f ->
+          // 每 1% 更新一次畫面就夠了
+          val pct = (f * 100).toInt()
+          if (pct != lastShown) {
+            lastShown = pct
+            main.post { if (update is UpdateUi.Downloading) update = UpdateUi.Downloading(rel, f) }
+          }
+        }
+      } catch (e: Exception) {
+        main.post { update = UpdateUi.Failed(rel, installBlocked = false) }
+        return@thread
+      }
+      main.post { update = UpdateUi.Installing(rel) }
+      try {
+        updater.install(file)
+      } catch (e: Exception) {
+        main.post { update = UpdateUi.Failed(rel, installBlocked = true) }
+        return@thread
+      }
+      // 裝成功的話 App 會被系統關掉，走不到這裡之後。過很久都沒動靜就當作裝不了。
+      main.postDelayed({ if (update is UpdateUi.Installing) onInstallFailed() }, 120_000)
+    }
+  }
+
+  private fun onInstallFailed() {
+    val u = update
+    if (u is UpdateUi.Installing) update = UpdateUi.Failed(u.release, installBlocked = true)
+  }
+
+  /** 按「稍後」：這次開 App 不再問 */
+  fun dismissUpdate() {
+    if (update is UpdateUi.Offer || update is UpdateUi.Failed) update = UpdateUi.None
   }
 
   /** 和鳴槍時間同一個時鐘（秒），畫面用它算倒數與進度 */
@@ -142,6 +241,7 @@ class StartDeviceViewModel(app: Application) : AndroidViewModel(app) {
   }
 
   override fun onCleared() {
+    UpdateReceiver.onInstallFailed = null
     controller.close()
     wifi.stop()
     server.stop()

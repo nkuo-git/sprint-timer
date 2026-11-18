@@ -134,7 +134,8 @@ wear/app/    手錶 App
   WifiLink.kt        要求系統打開 Wi-Fi，並把 UDP socket 綁在 Wi-Fi 上
   WatchGun.kt        鳴槍（共用手機的 GunPlayer）
   Speech.kt          語音口令（系統語音合成，沒有該語言時改用提示音）
-  Ui.kt              畫面（設計稿：Claude Design 畫面 10–14）
+  Updater.kt         App 內更新：查最新 Release、下載、交給系統安裝
+  Ui.kt              畫面（設計稿：Claude Design 畫面 10–15）
 modules/precision-clock/android/.../shared/GunPlayer.kt   手機和手錶共用的鳴槍與發聲時刻量測
 ```
 
@@ -146,6 +147,9 @@ modules/precision-clock/android/.../shared/GunPlayer.kt   手機和手錶共用�
 - **斷線補送**：手錶 Wi-Fi 天線比手機弱，鳴槍當下可能剛好斷線。鳴槍時間每秒重送一次直到收到成績（最長 10 分鐘），
   終點用 raceId 去重。按了「不等了」之後成績才到，仍會顯示。
 - **音量**：手錶喇叭小聲，發令時自動把媒體音量開到最大，離開 App 時還原。
+- **App 內更新**：和手機同一套規則（Release 標籤 `build-N` 比大小），下載同一個 Release 裡的 `sprint-timer-wear.apk`，
+  用 `PackageInstaller` 交給系統安裝。Android 12 以上，App 更新自己且宣告 `UPDATE_PACKAGES_WITHOUT_USER_ACTION` 時系統可以不跳確認；
+  否則會要求確認。有些手錶沒有確認畫面，這時會顯示「更新失敗」，要改用手機的安裝工具。第一次安裝一定要用安裝工具。
 - **沒有的功能**：手錶沒有相機，所以沒有反應時間與搶跑判定。
 - **Apple Watch**：未做。需要 Apple Developer 帳號才能裝到手錶；而且 watchOS 只允許音訊串流類 App 使用底層網路（UDP），
   一般 App 只能透過配對的 iPhone 中轉（WatchConnectivity），延遲大又不穩，不適合做時鐘同步。
@@ -154,3 +158,4 @@ modules/precision-clock/android/.../shared/GunPlayer.kt   手機和手錶共用�
 - 手錶喇叭在起跑線旁聽不聽得清楚；鳴槍時刻的量測在手錶上準不準（和手機一樣，用錄音或高速攝影對照）。
 - 手錶連終點手機熱點的距離；螢幕關閉（蓋住錶面）時同步是否持續。
 - 手錶上有沒有中文語音（沒有時會改用提示音）。
+- App 內更新在實體手錶上裝不裝得起來（不同廠牌、不同 Wear OS 版本可能不一樣）。

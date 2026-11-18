@@ -18,7 +18,8 @@ android {
     // 和手機 App 不同的套件名：兩個 App 各自獨立安裝，手錶不需要先配對裝了 App 的手機
     applicationId = "com.nkuo.sprinttimer.wear"
     minSdk = 30 // Wear OS 3
-    targetSdk = 34
+    // 要夠新：系統只讓目標版本夠新的 App 不經確認更新自己（App 內更新用）
+    targetSdk = 35
     versionCode = buildNumber.get()
     versionName = appVersion.get()
   }
