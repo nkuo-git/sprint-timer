@@ -122,7 +122,8 @@ test/              Vitest 單元測試（含合成影格模擬器）
 
 ## 手錶版起點機（Wear OS）
 Wear OS 手錶可以取代雙手機模式的「起跑手機 A」：喊口令、鳴槍、記下槍聲時刻，並當時鐘 server。終點手機 App 完全不用改，照樣輸入起點機的 IP 連線。
-程式在 `wear/`，是和手機 App 分開的原生專案（Kotlin + Compose），獨立安裝（套件名 `com.nkuo.sprinttimer.wear`）。
+程式在 `wear/`，是和手機 App 分開的原生專案（Kotlin + Compose），可以獨立使用。套件名和簽章金鑰都和手機 App 相同（`com.nkuo.sprinttimer`），
+這樣配對手機上的 App 才能和它互通（見下面「從手機更新手錶」）。v0.8 以前的手錶版套件名是 `com.nkuo.sprinttimer.wear`，是另一個 App，要移除後重裝。
 
 ```
 wear/core/   純 Kotlin，有單元測試
@@ -135,7 +136,8 @@ wear/app/    手錶 App
   WatchGun.kt        鳴槍（共用手機的 GunPlayer）
   Speech.kt          語音口令（系統語音合成，沒有該語言時改用提示音）
   Updater.kt         App 內更新：查最新 Release、下載、交給系統安裝
-  Ui.kt              畫面（設計稿：Claude Design 畫面 10–15）
+  PhoneLinkService.kt 接配對手機 App 的要求：回報版本、接收手機傳來的新版並安裝
+  Ui.kt              畫面（設計稿：Claude Design 畫面 10–15、26）
 modules/precision-clock/android/.../shared/GunPlayer.kt   手機和手錶共用的鳴槍與發聲時刻量測
 ```
 
@@ -150,6 +152,14 @@ modules/precision-clock/android/.../shared/GunPlayer.kt   手機和手錶共用�
 - **App 內更新**：和手機同一套規則（Release 標籤 `build-N` 比大小），下載同一個 Release 裡的 `sprint-timer-wear.apk`，
   用 `PackageInstaller` 交給系統安裝。Android 12 以上，App 更新自己且宣告 `UPDATE_PACKAGES_WITHOUT_USER_ACTION` 時系統可以不跳確認；
   否則會要求確認。有些手錶沒有確認畫面，這時會顯示「更新失敗」，要改用手機的安裝工具。第一次安裝一定要用安裝工具。
+- **從手機更新手錶**（設計稿 24–26）：手機 App 的帳號頁顯示手機與手錶各自的目前版本、最新版本，並可以把新版傳到手錶安裝。
+  走 Wear OS 的配對連線（Data Layer，藍牙），不用同一個 Wi-Fi、手錶 App 不用開著；和計時用的區網 UDP 無關。
+  - 手機端：`modules/watch-link`（原生模組：用能力名稱 `sprint_timer_watch` 找到有裝 App 的手錶、問版本、開檔案通道傳安裝檔）、
+    `src/update/watch.ts`（流程：下載 → 傳送 → 等手錶回報新版本）、`versionView.ts`（畫面文字）、`useVersions.ts`、`VersionSection.tsx`。
+  - 手錶端：`wear/core/PhoneLink.kt`（路徑與訊息格式，兩邊必須相同）、`wear/app/PhoneLinkService.kt`。
+    檔案由系統直接寫進手錶 App 的快取，收完後檢查（大小、是這個 App、比現在新）再用 `PackageInstaller` 安裝。
+  - 成功與否以「手錶回報的版本變成新版」為準（安裝成功時手錶 App 會被系統關掉）；手錶只在失敗或需要確認時主動回報。
+  - 前提：手機和手錶的安裝檔套件名、簽章都相同。CI 用手機 App 的金鑰簽手錶版，並在發佈前用 `scripts/check-apk-pair.mjs` 檢查。
 - **沒有的功能**：手錶沒有相機，所以沒有反應時間與搶跑判定。
 - **Apple Watch**：未做。需要 Apple Developer 帳號才能裝到手錶；而且 watchOS 只允許音訊串流類 App 使用底層網路（UDP），
   一般 App 只能透過配對的 iPhone 中轉（WatchConnectivity），延遲大又不穩，不適合做時鐘同步。
@@ -159,6 +169,7 @@ modules/precision-clock/android/.../shared/GunPlayer.kt   手機和手錶共用�
 - 手錶連終點手機熱點的距離；螢幕關閉（蓋住錶面）時同步是否持續。
 - 手錶上有沒有中文語音（沒有時會改用提示音）。
 - App 內更新在實體手錶上裝不裝得起來（不同廠牌、不同 Wear OS 版本可能不一樣）。
+- 從手機更新手錶：配對連線在實體手錶上找不找得到 App、藍牙傳 17 MB 要多久、背景收到檔案後能不能自己安裝。
 
 ## 帳號、雲端紀錄、標記跑者
 

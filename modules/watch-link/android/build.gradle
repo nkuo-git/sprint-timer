@@ -1,0 +1,20 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.watchlink'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.watchlink"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+}
+
+dependencies {
+  // 和配對手錶上的手錶版 App 互通（Wear OS Data Layer）。版本和 wear/app/build.gradle.kts 相同。
+  implementation 'com.google.android.gms:play-services-wearable:18.2.0'
+}

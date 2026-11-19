@@ -99,6 +99,10 @@ class StartDeviceViewModel(app: Application) : AndroidViewModel(app) {
   var update by mutableStateOf<UpdateUi>(UpdateUi.None)
     private set
 
+  /** 手機透過配對連線傳來的更新（畫面 26）：接收中、安裝中。和上面手錶自己下載的更新是兩條路。 */
+  var phoneUpdate by mutableStateOf(PhoneUpdate.state)
+    private set
+
   /** 目前安裝的顯示版本，例如 "0.6" */
   val currentVersion: String get() = updater.currentVersion
 
@@ -110,6 +114,7 @@ class StartDeviceViewModel(app: Application) : AndroidViewModel(app) {
     speech.lang = lang
     wifi.start()
     UpdateReceiver.onInstallFailed = { main.post { onInstallFailed() } }
+    PhoneUpdate.onChange = { s -> main.post { phoneUpdate = s } }
     checkForUpdate()
   }
 
@@ -179,6 +184,16 @@ class StartDeviceViewModel(app: Application) : AndroidViewModel(app) {
     if (update is UpdateUi.Offer || update is UpdateUi.Failed) update = UpdateUi.None
   }
 
+  /** 手機傳來的安裝檔已經收到多少（0–1）。檔案是系統直接寫進來的，所以看檔案大小。 */
+  fun phoneReceiveFraction(): Float {
+    val s = phoneUpdate as? PhoneUpdate.State.Receiving ?: return 1f
+    val got = PhoneUpdate.file(getApplication(), s.update, fresh = false).length()
+    return (got.toFloat() / s.update.sizeBytes).coerceIn(0f, 1f)
+  }
+
+  /** 接收或安裝太久沒動靜：收起畫面，回到待命（手機那邊會顯示失敗）。 */
+  fun dismissPhoneUpdate() = PhoneUpdate.set(PhoneUpdate.State.None)
+
   /** 和鳴槍時間同一個時鐘（秒），畫面用它算倒數與進度 */
   fun now(): Double = GunPlayer.nowSec()
 
@@ -242,6 +257,7 @@ class StartDeviceViewModel(app: Application) : AndroidViewModel(app) {
 
   override fun onCleared() {
     UpdateReceiver.onInstallFailed = null
+    PhoneUpdate.onChange = null
     controller.close()
     wifi.stop()
     server.stop()

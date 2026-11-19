@@ -17,8 +17,12 @@ export interface ReleaseInfo {
   notes: string;
 }
 
-/** 從 GitHub releases/latest API 回應取出更新資訊；格式不符回傳 null */
-export function pickRelease(json: any, assetName = 'sprint-timer.apk'): ReleaseInfo | null {
+export const PHONE_APK = 'sprint-timer.apk';
+/** 手錶版（Wear OS）的安裝檔，和手機版在同一個 Release 裡 */
+export const WATCH_APK = 'sprint-timer-wear.apk';
+
+/** 從 GitHub releases/latest API 回應取出更新資訊；格式不符、或這個 Release 沒有這個安裝檔回傳 null */
+export function pickRelease(json: any, assetName = PHONE_APK): ReleaseInfo | null {
   const build = parseBuildTag(json?.tag_name);
   const asset = (json?.assets ?? []).find((a: any) => a?.name === assetName);
   if (build === null || !asset?.browser_download_url) return null;
@@ -28,4 +32,14 @@ export function pickRelease(json: any, assetName = 'sprint-timer.apk'): ReleaseI
 
 export function isNewer(release: ReleaseInfo | null, currentBuild: number | null): boolean {
   return !!release && currentBuild !== null && release.build > currentBuild;
+}
+
+/** 最新一版 Release 裡，手機和手錶各自的安裝檔（帳號頁的「App 版本」用） */
+export interface LatestReleases {
+  phone: ReleaseInfo | null;
+  watch: ReleaseInfo | null;
+}
+
+export function pickLatest(json: any): LatestReleases {
+  return { phone: pickRelease(json, PHONE_APK), watch: pickRelease(json, WATCH_APK) };
 }
