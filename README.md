@@ -30,7 +30,8 @@ App 使用原生模組（相機、精準時鐘），無法在 Expo Go 執行，�
   https://github.com/nkuo-git/sprint-timer/releases/latest/download/sprint-timer-wear.apk
   手錶不能直接開 APK，要從 Android 手機用無線偵錯安裝：手錶「設定 → 開發人員選項 → 無線偵錯」，
   手機用 Bugjaeger 或 Wear Installer 之類的 App 連上手錶後安裝這個檔案。
-  第一次要這樣裝；之後手錶 App 開啟時會自己檢查新版並更新。
+  第一次要這樣裝；之後可以從手機 App 的帳號頁按「更新手錶」（手錶要和這支手機配對），或讓手錶 App 開啟時自己檢查新版並更新。
+  v0.8 以前裝的手錶版是另一個套件（`com.nkuo.sprinttimer.wear`），不會自動變成新版：請先移除，再照上面的方式裝一次。
 - iOS：設定 `EXPO_TOKEN` secret 後手動執行 “iOS build (EAS)” workflow（需 Apple Developer 帳號）。
 
 ## 版本號

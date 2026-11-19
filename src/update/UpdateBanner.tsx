@@ -7,17 +7,23 @@ import type { ReleaseInfo } from './version';
 /**
  * 設計稿「6 更新提示」：從下方滑出的面板。
  * App 回到首頁時自動檢查，有新版才出現；計時畫面不會檢查，所以計時中不會跳出來。
+ * 帳號頁的「更新」按鈕也用這個面板：傳入已經查到的 release 就不再自己檢查，關掉時呼叫 onClose。
  */
-export function UpdateSheet() {
-  const [rel, setRel] = useState<ReleaseInfo | null>(null);
-  const [dismissed, setDismissed] = useState(false);
+export function UpdateSheet({ release, onClose }: { release?: ReleaseInfo; onClose?(): void } = {}) {
+  const [rel, setRel] = useState<ReleaseInfo | null>(release ?? null);
+  const [dismissed, setDismissedState] = useState(false);
+  const setDismissed = (v: boolean) => {
+    setDismissedState(v);
+    if (v) onClose?.();
+  };
   const [progress, setProgress] = useState<number | null>(null);
   const [launched, setLaunched] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
+    if (release) return;
     checkForUpdate().then(setRel).catch(() => {}); // 沒網路時安靜略過
-  }, []);
+  }, [release]);
 
   if (!rel || dismissed) return null;
 

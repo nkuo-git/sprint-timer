@@ -6,7 +6,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.os.Build
+import com.nkuo.sprinttimer.wear.core.FailReason
 import com.nkuo.sprinttimer.wear.core.ReleaseInfo
+import com.nkuo.sprinttimer.wear.core.UpdateState
 import com.nkuo.sprinttimer.wear.core.isNewer
 import com.nkuo.sprinttimer.wear.core.pickRelease
 import java.io.File
@@ -82,6 +84,15 @@ class Updater(private val context: Context) {
     }
   }
 
+  /** 讀安裝檔本身的 versionCode。讀不出來、或不是這個 App 的安裝檔回傳 null。（簽章由系統在安裝時檢查。） */
+  fun archiveBuild(apk: File): Int? =
+    try {
+      val info = context.packageManager.getPackageArchiveInfo(apk.path, 0)
+      if (info != null && info.packageName == context.packageName) info.longVersionCode.toInt() else null
+    } catch (e: Exception) {
+      null
+    }
+
   /** 把下載好的安裝檔交給系統安裝。結果（失敗或需要確認）由 [UpdateReceiver] 收。成功的話 App 會被系統關掉。 */
   fun install(apk: File) {
     val installer = context.packageManager.packageInstaller
@@ -115,23 +126,30 @@ class Updater(private val context: Context) {
   }
 }
 
-/** 收系統回報的安裝結果 */
+/** 收系統回報的安裝結果。手錶自己下載的更新、手機傳來的更新（[PhoneLinkService]）都走這裡。 */
 class UpdateReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
     when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
-      PackageInstaller.STATUS_SUCCESS -> {}
+      PackageInstaller.STATUS_SUCCESS -> PhoneUpdate.forgetSender(context)
       PackageInstaller.STATUS_PENDING_USER_ACTION -> {
         // 系統要使用者確認：把確認畫面叫出來。手錶上沒有這個畫面的話就當作不能安裝。
         @Suppress("DEPRECATION")
         val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
         try {
           context.startActivity(confirm!!.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+          PhoneUpdate.reportToSender(context, UpdateState.NEEDS_CONFIRM, keep = true)
         } catch (e: Exception) {
-          onInstallFailed?.invoke()
+          failed(context)
         }
       }
-      else -> onInstallFailed?.invoke()
+      else -> failed(context)
     }
+  }
+
+  private fun failed(context: Context) {
+    onInstallFailed?.invoke()
+    PhoneUpdate.set(PhoneUpdate.State.None)
+    PhoneUpdate.reportToSender(context, UpdateState.FAILED, FailReason.INSTALL_BLOCKED)
   }
 
   companion object {

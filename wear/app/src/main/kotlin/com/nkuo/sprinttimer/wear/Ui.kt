@@ -29,6 +29,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -64,10 +65,11 @@ import com.nkuo.sprinttimer.wear.core.formatOfficial
 import com.nkuo.sprinttimer.wear.core.formatRaw
 import com.nkuo.sprinttimer.wear.core.formatSize
 import kotlin.math.ceil
+import kotlinx.coroutines.delay
 
 /**
  * 手錶起點機的畫面。
- * 設計稿：Claude Design「短跑計時 App 介面」畫面 10–15 https://claude.ai/artifact/UXK5fTNCPcaz6D5CiXfARX
+ * 設計稿：Claude Design「短跑計時 App 介面」畫面 10–15、26 https://claude.ai/artifact/UXK5fTNCPcaz6D5CiXfARX
  * 設計稿把 192dp 的圓形錶面畫成 384px（2 倍），這裡所有尺寸都直接寫設計稿的 px，再依實際錶面大小縮放。
  * 顏色沿用手機版（src/ui/kit.tsx），只有底色改純黑（手錶省電）。
  */
@@ -206,7 +208,7 @@ private fun Face(padH: Number = 40, padV: Number = 40, gap: Number = 8, content:
   }
 }
 
-private enum class Screen { NO_SPEAKER, NO_WIFI, CONNECT, READY, SETTINGS, SEQUENCE, RESULT, UPDATE }
+private enum class Screen { NO_SPEAKER, NO_WIFI, CONNECT, READY, SETTINGS, SEQUENCE, RESULT, UPDATE, PHONE_UPDATE }
 
 @Composable
 fun App(vm: StartDeviceViewModel, onExit: () -> Unit) {
@@ -215,6 +217,7 @@ fun App(vm: StartDeviceViewModel, onExit: () -> Unit) {
   var showSettings by rememberSaveable { mutableStateOf(false) }
   val race = vm.race
   val update = vm.update
+  val phoneUpdate = vm.phoneUpdate
 
   // 待命時最底下那一層：還沒連線顯示 IP，連上了（或選了只發令）顯示開始鈕
   val waiting = if (vm.ip == null) Screen.NO_WIFI else Screen.CONNECT
@@ -224,6 +227,7 @@ fun App(vm: StartDeviceViewModel, onExit: () -> Unit) {
     race.phase == Phase.COUNTDOWN || race.phase == Phase.MARKS || race.phase == Phase.SET || race.phase == Phase.GUN -> Screen.SEQUENCE
     race.phase == Phase.RESULT || race.phase == Phase.NO_RESULT -> Screen.RESULT
     // 更新只在待命時出現，不打斷進行中的一趟
+    phoneUpdate != PhoneUpdate.State.None -> Screen.PHONE_UPDATE
     update != UpdateUi.None -> Screen.UPDATE
     showSettings -> Screen.SETTINGS
     else -> home
@@ -254,7 +258,7 @@ fun App(vm: StartDeviceViewModel, onExit: () -> Unit) {
       backgroundKey = behind ?: "exit",
       contentKey = screen,
       // 口令進行中不能滑掉，避免誤觸
-      hasBackground = screen != Screen.SEQUENCE && !(screen == Screen.UPDATE && updateBusy),
+      hasBackground = screen != Screen.SEQUENCE && screen != Screen.PHONE_UPDATE && !(screen == Screen.UPDATE && updateBusy),
     ) { isBackground ->
       when (if (isBackground) behind else screen) {
         Screen.NO_SPEAKER -> NoSpeakerScreen()
@@ -265,6 +269,7 @@ fun App(vm: StartDeviceViewModel, onExit: () -> Unit) {
         Screen.SEQUENCE -> SequenceScreen(race, now = vm::now, onCancel = vm::cancel, onStopWaiting = vm::next)
         Screen.RESULT -> ResultScreen(race, onAgain = vm::next)
         Screen.UPDATE -> UpdateScreen(update, vm.currentVersion, onUpdate = vm::startUpdate, onLater = vm::dismissUpdate)
+        Screen.PHONE_UPDATE -> PhoneUpdateScreen(phoneUpdate, fraction = vm::phoneReceiveFraction, onStalled = vm::dismissPhoneUpdate)
         null -> Box(Modifier.fillMaxSize().background(C.bg))
       }
     }
@@ -509,6 +514,51 @@ private fun UpdateScreen(update: UpdateUi, currentVersion: String, onUpdate: () 
       TextButton("稍後", onLater)
     }
     UpdateUi.None -> Box(Modifier.fillMaxSize().background(C.bg))
+  }
+}
+
+// ---------- 畫面 26：手機傳來的更新 ----------
+
+@Composable
+private fun PhoneUpdateScreen(state: PhoneUpdate.State, fraction: () -> Float, onStalled: () -> Unit) {
+  when (state) {
+    is PhoneUpdate.State.Receiving -> {
+      var shown by remember(state) { mutableFloatStateOf(fraction()) }
+      LaunchedEffect(state) {
+        // 檔案超過 90 秒沒變大就當作斷線了
+        var lastGrowth = System.currentTimeMillis()
+        while (true) {
+          delay(500)
+          val f = fraction()
+          if (f > shown) lastGrowth = System.currentTimeMillis()
+          shown = f
+          if (System.currentTimeMillis() - lastGrowth > 90_000) {
+            onStalled()
+            break
+          }
+        }
+      }
+      RingFace(shown) {
+        Txt("手機傳來新版", 22, C.infoText, maxLines = 1)
+        Txt("v${state.update.version}", 60, C.text, FontWeight.Bold, tabular = true, lineHeight = 1.1f, maxLines = 1)
+        Txt("接收中…", 26, C.text, FontWeight.Bold)
+        Spacer(Modifier.height(px(4)))
+        Txt("請讓手錶留在\n手機旁邊", 22, C.soft, lineHeight = 1.35f)
+      }
+    }
+    is PhoneUpdate.State.Installing -> {
+      LaunchedEffect(state) {
+        // 裝成功的話 App 會被系統關掉，等不到這裡。過很久都沒動靜就當作裝不了。
+        delay(120_000)
+        onStalled()
+      }
+      RingFace(1f) {
+        Txt("安裝中…", 44, C.text, FontWeight.Black)
+        Spacer(Modifier.height(px(8)))
+        Txt("App 會自己關掉。\n裝好後請再打開一次。", 22, C.soft, lineHeight = 1.35f)
+      }
+    }
+    PhoneUpdate.State.None -> Box(Modifier.fillMaxSize().background(C.bg))
   }
 }
 

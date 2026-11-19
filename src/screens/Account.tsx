@@ -4,6 +4,7 @@ import { useAccount } from '../account/AccountContext';
 import type { AccountSnapshot } from '../account/service';
 import { initial } from '../records/format';
 import { Avatar, Banner, Btn, C, Header, NUM, s } from '../ui/kit';
+import { VersionSection } from '../update/VersionSection';
 
 /** 同步狀態的文字與色調（帳號頁、紀錄頁、成績頁共用） */
 export function syncSummary(a: AccountSnapshot, now = Date.now()): { title: string; detail: string; tone: 'info' | 'warn' | 'bad' } {
@@ -24,7 +25,7 @@ export function syncSummary(a: AccountSnapshot, now = Date.now()): { title: stri
   return { title: '雲端已同步', detail: `所有成績都已存到雲端 · ${ago}`, tone: 'info' };
 }
 
-/** 設計稿「20 帳號」 */
+/** 設計稿「24 帳號：App 版本」（取代 20；多了 App 版本區塊，內容變長所以整頁可以捲動） */
 export function Account({ onBack, onHistory, onEditNickname }: { onBack(): void; onHistory(): void; onEditNickname(): void }) {
   const { account, service } = useAccount();
   const [busy, setBusy] = useState<'' | 'out' | 'delete'>('');
@@ -99,6 +100,8 @@ export function Account({ onBack, onHistory, onEditNickname }: { onBack(): void;
         </Pressable>
 
         <Text style={{ color: C.dim, fontSize: 14, lineHeight: 24 }}>換新手機時，安裝 App 後用同一個 Email 登入，紀錄就會全部回來。</Text>
+
+        <VersionSection />
         {error ? <Banner tone="bad" text={error} /> : null}
 
         <View style={{ flex: 1 }} />

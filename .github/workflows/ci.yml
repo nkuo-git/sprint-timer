@@ -54,22 +54,24 @@ jobs:
           V=$(gh api "repos/${{ github.repository }}/releases?per_page=100" | node scripts/next-version.mjs)
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "App version: $V (versionCode ${{ github.run_number }})"
+      # 先產生手機 App 的 Android 專案：手錶版要用同一把簽章金鑰（android/app/debug.keystore），
+      # 兩個 App 套件名和簽章都相同，手機才能透過配對連線看手錶版本、幫手錶更新。
+      - run: npx expo prebuild --platform android --no-install
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+          APP_VERSION: ${{ steps.ver.outputs.version }}
       # 手錶版（Wear OS）起點機：獨立的原生專案，版本號和手機 App 同一組。放在手機建置前面，有錯可以早點知道。
       - name: Watch app unit tests
         working-directory: wear
         run: ./gradlew :core:test --no-daemon
       - name: Build watch APK
         working-directory: wear
-        run: ./gradlew :app:assembleRelease --no-daemon -PappVersion=${{ steps.ver.outputs.version }} -PbuildNumber=${{ github.run_number }}
+        run: ./gradlew :app:assembleRelease --no-daemon -PappVersion=${{ steps.ver.outputs.version }} -PbuildNumber=${{ github.run_number }} -PsigningStore=${{ github.workspace }}/android/app/debug.keystore
       - uses: actions/upload-artifact@v4
         with:
           name: sprint-timer-wear-apk
           path: wear/app/build/outputs/apk/release/*.apk
           retention-days: 30
-      - run: npx expo prebuild --platform android --no-install
-        env:
-          BUILD_NUMBER: ${{ github.run_number }}
-          APP_VERSION: ${{ steps.ver.outputs.version }}
       - name: Build APK
         working-directory: android
         run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a
@@ -78,6 +80,9 @@ jobs:
           name: sprint-timer-android-apk
           path: android/app/build/outputs/apk/release/*.apk
           retention-days: 30
+      # 手機和手錶的安裝檔必須是同一個套件名、同一把簽章，否則裝得起來但兩邊連不上。不一樣就不要發佈。
+      - name: Check phone and watch APKs can talk to each other
+        run: node scripts/check-apk-pair.mjs android/app/build/outputs/apk/release/app-release.apk wear/app/build/outputs/apk/release/app-release.apk
       # main 分支每次建置都發一個 Release，標題是顯示版本 v0.N，APK 檔名固定為 sprint-timer.apk，
       # 所以最新版永遠是：https://github.com/<owner>/<repo>/releases/latest/download/sprint-timer.apk
       # 手錶版同一個 Release，檔名固定為 sprint-timer-wear.apk。

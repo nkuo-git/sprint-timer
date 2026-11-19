@@ -42,3 +42,30 @@ describe('版本號計算', () => {
     expect(nextVersion([{ name: 'v1.0' }, { name: 'v0.12' }], 1)).toBe('1.1');
   });
 });
+
+import { pairProblems, parseBadging, parseCerts } from '../scripts/check-apk-pair.mjs';
+
+describe('發佈前檢查：手機和手錶的安裝檔是同一個 App', () => {
+  const cert = 'fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c';
+  it('讀 aapt2 和 apksigner 的輸出', () => {
+    expect(parseBadging("package: name='com.nkuo.sprinttimer' versionCode='34' versionName='0.9' platformBuildVersionName='15'\nsdkVersion:'26'")).toEqual({ pkg: 'com.nkuo.sprinttimer', versionCode: 34 });
+    expect(parseBadging('garbage')).toBeNull();
+    expect(parseCerts(`Signer #1 certificate DN: CN=Android Debug, O=Android, C=US\nSigner #1 certificate SHA-256 digest: ${cert}\nSigner #1 certificate SHA-1 digest: 5e8f16062ea3cd2c4a0d547876baa6f38cabf625\n`)).toEqual([cert]);
+  });
+  it('雲端建置機上的 apksigner 輸出（V2 Signer: …）', () => {
+    const out = `V2 Signer: certificate DN: CN=Android Debug, OU=Android, O=Unknown, L=Unknown, ST=Unknown, C=US\nV2 Signer: certificate SHA-256 digest: ${cert}\nV2 Signer: certificate SHA-1 digest: 5e8f16062ea3cd2c4a0d547876baa6f38cabf625\nV2 Signer: certificate MD5 digest: 20f46148b72d8e5e5ca23d37a4f41490\n`;
+    expect(parseCerts(out)).toEqual([cert]);
+  });
+  it('新版 apksigner 依系統版本分段列出同一張憑證：只算一張', () => {
+    const out = `Signer (minSdkVersion=24, maxSdkVersion=32) certificate DN: CN=Android Debug\nSigner (minSdkVersion=24, maxSdkVersion=32) certificate SHA-256 digest: ${cert}\nSigner (minSdkVersion=33, maxSdkVersion=2147483647) certificate SHA-256 digest: ${cert}\r\n`;
+    expect(parseCerts(out)).toEqual([cert]);
+  });
+  it('套件名、簽章、版本號都要相同', () => {
+    const phone = { pkg: 'com.nkuo.sprinttimer', versionCode: 34, certs: [cert] };
+    expect(pairProblems(phone, { ...phone })).toEqual([]);
+    expect(pairProblems(phone, { ...phone, pkg: 'com.nkuo.sprinttimer.wear' })).toHaveLength(1);
+    expect(pairProblems(phone, { ...phone, certs: ['51e11ab5'] })).toHaveLength(1);
+    expect(pairProblems(phone, { ...phone, versionCode: 33 })).toHaveLength(1);
+    expect(pairProblems({ ...phone, certs: [] }, { ...phone, certs: [] })).toHaveLength(1);
+  });
+});

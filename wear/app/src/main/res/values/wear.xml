@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 手錶 App 對配對手機宣告的能力：手機 App 用這個名稱找到「有裝手錶 App 的那支錶」（PhoneLink.CAPABILITY）。 -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:keep="@array/android_wear_capabilities">
+  <string-array name="android_wear_capabilities">
+    <item>sprint_timer_watch</item>
+  </string-array>
+</resources>
