@@ -15,7 +15,9 @@ export function parseBadging(out) {
 
 /** 從 `apksigner verify --print-certs` 的輸出取出每個簽章憑證的 SHA-256 */
 export function parseCerts(out) {
-  return [...out.matchAll(/^Signer #\d+ certificate SHA-256 digest: ([0-9a-f]{64})$/gm)].map((m) => m[1]).sort();
+  // 新舊版 apksigner 的開頭不一樣：「Signer #1 certificate …」或「Signer (minSdkVersion=24, maxSdkVersion=32) certificate …」
+  const found = [...out.matchAll(/^Signer\b.*\bcertificate SHA-256 digest: ([0-9a-f]{64})\s*$/gm)].map((m) => m[1]);
+  return [...new Set(found)].sort();
 }
 
 /** 兩個安裝檔不能互通的原因；可以互通回傳空陣列 */
@@ -37,7 +39,9 @@ function buildTools() {
 function inspect(tools, apk) {
   const badging = parseBadging(execFileSync(join(tools, 'aapt2'), ['dump', 'badging', apk], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }));
   if (!badging) throw new Error(`讀不到 ${apk} 的套件名`);
-  const certs = parseCerts(execFileSync(join(tools, 'apksigner'), ['verify', '--print-certs', apk], { encoding: 'utf8' }));
+  const signers = execFileSync(join(tools, 'apksigner'), ['verify', '--print-certs', apk], { encoding: 'utf8' });
+  const certs = parseCerts(signers);
+  if (!certs.length) console.error(`讀不到 ${apk} 的簽章憑證，apksigner 的輸出：\n${signers}`);
   return { ...badging, certs };
 }
 
