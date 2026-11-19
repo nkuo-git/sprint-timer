@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { AccountService } from '../src/account/service';
 import { RaceDraft } from '../src/records/draft';
-import { FakeCloud, memoryStorage } from './fakeCloud';
-
-const CFG = { url: 'https://fake.supabase.co', key: 'anon-key' };
+import { makeCloud, memoryStorage, type TestCloud } from './testCloud';
 
 /** 一支手機上的 App；傳入同一組 files 等於重開 App */
-function app(cloud: FakeCloud, files = { session: memoryStorage(), records: memoryStorage() }, config = CFG) {
+function app(cloud: TestCloud, files = { session: memoryStorage(), records: memoryStorage() }, config = cloud.config) {
   const service = new AccountService({
     config,
     fetch: cloud.fetch,
@@ -15,8 +13,9 @@ function app(cloud: FakeCloud, files = { session: memoryStorage(), records: memo
     now: () => cloud.nowS * 1000,
   });
   const login = async (email: string, nickname?: string) => {
-    await service.requestCode(email);
-    await service.verifyCode(email, cloud.codeFor(email));
+    await service.requestLink(email);
+    expect(await service.handleLink(await cloud.linkFor(email))).toBe(true);
+    expect(service.getSnapshot().linkError).toBeNull();
     if (nickname) await service.setNickname(nickname);
     await service.syncNow();
   };
@@ -27,7 +26,7 @@ const finished = (times: number[]) => times.map((time, i) => ({ id: i + 1, place
 
 describe('帳號流程', () => {
   it('第一次登入要先取暱稱，取完就不再問；重開 App 沒網路也記得', async () => {
-    const cloud = new FakeCloud();
+    const cloud = await makeCloud();
     const a = app(cloud);
     await a.service.start();
     expect(a.service.getSnapshot()).toMatchObject({ ready: true, cloudEnabled: true, user: null, needsNickname: false });
@@ -44,8 +43,62 @@ describe('帳號流程', () => {
     expect(again.service.getSnapshot().user?.email).toBe('nick@example.com');
   });
 
+  it('寄出登入信後等使用者點連結；App 被連結打開就完成登入，別人查得到這個 Email', async () => {
+    const cloud = await makeCloud();
+    const a = app(cloud);
+    await a.service.start();
+    await a.service.requestLink('Nick@Example.com');
+    expect(a.service.getSnapshot()).toMatchObject({ user: null, pendingEmail: 'nick@example.com', linkError: null });
+
+    // 寄完信 App 被系統關掉，使用者點連結時重新打開
+    const reopened = app(cloud, a.files);
+    await reopened.service.start();
+    expect(reopened.service.getSnapshot().pendingEmail).toBe('nick@example.com');
+    expect(await reopened.service.handleLink('https://example.com/other')).toBe(false);
+    expect(await reopened.service.handleLink(null)).toBe(false);
+    expect(await reopened.service.handleLink(await cloud.linkFor('nick@example.com'))).toBe(true);
+    expect(reopened.service.getSnapshot()).toMatchObject({ pendingEmail: null, linkError: null, signingIn: false, needsNickname: true });
+    expect(reopened.service.getSnapshot().user?.email).toBe('nick@example.com');
+    await reopened.service.setNickname('Nick');
+    // 同一個連結再點一次：已經登入了，不當成錯誤
+    expect(await reopened.service.handleLink(await cloud.linkFor('nick@example.com'))).toBe(true);
+    expect(reopened.service.getSnapshot().linkError).toBeNull();
+
+    const b = app(cloud);
+    await b.service.start();
+    await b.login('an@example.com', '小安');
+    await reopened.service.syncNow();
+    expect(await b.service.searchPeople('nick@example.com')).toEqual([{ id: reopened.service.getSnapshot().user!.id, nickname: 'Nick' }]);
+  });
+
+  it('連結失效、沒寄過信就點連結：不會登入，畫面拿得到原因；改 Email 可以重來', async () => {
+    const cloud = await makeCloud();
+    const a = app(cloud);
+    await a.service.start();
+    await a.login('nick@example.com', 'Nick');
+    const used = await cloud.linkFor('nick@example.com');
+    await a.service.signOut();
+
+    // 這支手機沒有寄過信
+    expect(await a.service.handleLink(used)).toBe(true);
+    expect(a.service.getSnapshot()).toMatchObject({ user: null, linkError: '請先輸入 Email 寄出登入信，再點信裡的連結' });
+    a.service.clearLinkError();
+    expect(a.service.getSnapshot().linkError).toBeNull();
+
+    // 寄了新的信，卻點到舊信的連結
+    await a.service.requestLink('nick@example.com');
+    expect(await a.service.handleLink(used)).toBe(true);
+    expect(a.service.getSnapshot()).toMatchObject({ user: null, pendingEmail: 'nick@example.com', linkError: '這個登入連結已經用過或失效了，請重新寄一封登入信' });
+    await expect(a.service.signInWithLink('亂貼的文字')).rejects.toMatchObject({ message: '這不是登入信裡的連結' });
+
+    await a.service.cancelLogin();
+    expect(a.service.getSnapshot()).toMatchObject({ pendingEmail: null, linkError: null });
+    await a.login('nick@example.com');
+    expect(a.service.getSnapshot()).toMatchObject({ nickname: 'Nick', needsNickname: false });
+  });
+
   it('在新手機登入已有暱稱的帳號，不會再問暱稱', async () => {
-    const cloud = new FakeCloud();
+    const cloud = await makeCloud();
     const a = app(cloud);
     await a.service.start();
     await a.login('nick@example.com', 'Nick');
@@ -56,7 +109,7 @@ describe('帳號流程', () => {
   });
 
   it('暱稱被用掉時回報 taken，狀態不變', async () => {
-    const cloud = new FakeCloud();
+    const cloud = await makeCloud();
     const a = app(cloud);
     await a.service.start();
     await a.login('a@example.com', 'Mia');
@@ -68,8 +121,8 @@ describe('帳號流程', () => {
   });
 
   it('沒設定雲端時，登入功能停用，但成績照樣存在手機', async () => {
-    const cloud = new FakeCloud();
-    const a = app(cloud, undefined, { url: '', key: '' });
+    const cloud = await makeCloud();
+    const a = app(cloud, undefined, { projectId: '', apiKey: '' });
     await a.service.start();
     expect(a.service.getSnapshot().cloudEnabled).toBe(false);
     const draft = new RaceDraft('single-phone', { distanceM: 100, signal: 'sound' });
@@ -78,11 +131,11 @@ describe('帳號流程', () => {
     await a.service.syncNow();
     expect(a.service.store.myResults(null)).toHaveLength(1);
     expect(cloud.requests).toHaveLength(0);
-    await expect(async () => a.service.requestCode('a@example.com')).rejects.toThrow();
+    await expect(async () => a.service.requestLink('a@example.com')).rejects.toThrow();
   });
 
   it('存成績後畫面收到通知，待上傳數量正確', async () => {
-    const cloud = new FakeCloud();
+    const cloud = await makeCloud();
     const a = app(cloud);
     await a.service.start();
     await a.login('nick@example.com', 'Nick');
@@ -103,7 +156,7 @@ describe('帳號流程', () => {
   });
 
   it('登出後手機上不留這個帳號已上傳的紀錄；再登入全部回來', async () => {
-    const cloud = new FakeCloud();
+    const cloud = await makeCloud();
     const a = app(cloud);
     await a.service.start();
     await a.login('nick@example.com', 'Nick');
@@ -111,7 +164,7 @@ describe('帳號流程', () => {
     draft.tag(1, { kind: 'self' });
     await a.service.saveRace(draft.toRace(finished([11.2])));
     await a.service.signOut();
-    expect(cloud.races).toHaveLength(1);
+    expect(await cloud.docs('results')).toHaveLength(1);
     expect(a.service.getSnapshot()).toMatchObject({ user: null, nickname: null });
     expect(a.service.store.races()).toHaveLength(0);
     await a.login('nick@example.com');
@@ -120,21 +173,23 @@ describe('帳號流程', () => {
   });
 
   it('刪除帳號：雲端和手機上的紀錄都清掉', async () => {
-    const cloud = new FakeCloud();
+    const cloud = await makeCloud();
     const a = app(cloud);
     await a.service.start();
     await a.login('nick@example.com', 'Nick');
     await a.service.saveRace(new RaceDraft('single-phone').toRace(finished([11.2])));
     await a.service.syncNow();
     await a.service.deleteAccount();
-    expect(cloud.races).toHaveLength(0);
-    expect(cloud.profiles).toHaveLength(0);
+    expect(await cloud.docs('results')).toHaveLength(0);
+    expect(await cloud.docs('users')).toHaveLength(0);
+    expect(await cloud.docs('nicknames')).toHaveLength(0);
+    expect(await cloud.docs('emails')).toHaveLength(0);
     expect(a.service.store.races()).toHaveLength(0);
     expect(a.service.getSnapshot().user).toBeNull();
   });
 
   it('把別人標記給我的成績拿掉後，立刻從我的紀錄消失', async () => {
-    const cloud = new FakeCloud();
+    const cloud = await makeCloud();
     const an = app(cloud);
     await an.service.start();
     await an.login('an@example.com', '小安');

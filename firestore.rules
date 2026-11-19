@@ -1,0 +1,123 @@
+rules_version = '2';
+
+// 短跑計時的資料庫權限規則。App 直接用使用者的登入憑證讀寫 Firestore，
+// 誰能讀寫什麼完全由這份規則決定。改了以後要重新發佈（見 firebase/README.md），
+// 並執行 npm run test:cloud（在 Firebase 模擬器上用這份規則跑測試）。
+//
+// 集合：
+//   users/{uid}        暱稱（所有登入的人都讀得到，用來顯示與搜尋）
+//   nicknames/{key}    暱稱（小寫）→ uid，用來保證暱稱不重複
+//   emails/{email}     Email → uid，只能「知道完整 Email 才查得到」，不能列出
+//   results/{id}       一筆成績，帶著那一趟比賽的時間、距離。計時的人（owner）可讀寫；
+//                      被標記的人（taggedTo）只讀得到自己那一筆，並且可以把自己的標記拿掉
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function me() {
+      return request.auth.uid;
+    }
+
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function nicknamePath(key) {
+      return /databases/$(database)/documents/nicknames/$(key);
+    }
+
+    // ───────────── 暱稱 ─────────────
+
+    function validUser(d) {
+      return d.keys().hasOnly(['nickname', 'nicknameKey', 'search'])
+        && d.nickname is string
+        && d.nickname.size() >= 2 && d.nickname.size() <= 64
+        && d.nickname.trim() == d.nickname
+        && !d.nickname.matches('.*[@/].*')
+        && d.nicknameKey is string
+        && d.nicknameKey == d.nickname.lower()
+        && d.search is list && d.search.size() <= 160;
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn();
+      // 個人資料上的暱稱一定要是自己佔下的那一個（和 nicknames 文件在同一次寫入裡一起改）
+      allow create, update: if signedIn() && me() == uid
+        && validUser(request.resource.data)
+        && existsAfter(nicknamePath(request.resource.data.nicknameKey))
+        && getAfter(nicknamePath(request.resource.data.nicknameKey)).data.uid == me();
+      allow delete: if signedIn() && me() == uid;
+    }
+
+    match /nicknames/{key} {
+      allow get: if signedIn();
+      // 只能佔還沒有人用的（已存在的文件不能改），而且要同時把自己的個人資料改成這個暱稱
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['uid'])
+        && request.resource.data.uid == me()
+        && existsAfter(userPath(me()))
+        && getAfter(userPath(me())).data.nicknameKey == key;
+      // 只能放掉自己的，而且自己已經不用這個暱稱了
+      allow delete: if signedIn()
+        && resource.data.uid == me()
+        && (!existsAfter(userPath(me())) || getAfter(userPath(me())).data.nicknameKey != key);
+    }
+
+    // ───────────── Email → 帳號 ─────────────
+
+    match /emails/{email} {
+      // 只能用完整的 Email 查（get），不能列出所有 Email（list）
+      allow get: if signedIn();
+      allow create, update: if signedIn()
+        && request.auth.token.email is string
+        && request.auth.token.email.lower() == email
+        && request.auth.token.email_verified == true
+        && request.resource.data.keys().hasOnly(['uid'])
+        && request.resource.data.uid == me();
+      allow delete: if signedIn() && resource.data.uid == me();
+    }
+
+    // ───────────── 成績 ─────────────
+
+    function validResult(d) {
+      return d.keys().hasOnly(['owner', 'raceId', 'ranAt', 'distanceM', 'mode', 'signal', 'place', 'time', 'official', 'reaction', 'falseStart', 'auto', 'runner', 'taggedTo', 'runnerName'])
+        && d.keys().hasAll(['owner', 'raceId', 'ranAt', 'distanceM', 'mode', 'place', 'time', 'official', 'falseStart', 'auto', 'runner', 'taggedTo', 'runnerName'])
+        && d.owner == me()
+        && d.raceId is string && d.raceId.size() > 0 && d.raceId.size() <= 64
+        && d.ranAt is string && d.ranAt.size() >= 10 && d.ranAt.size() <= 40
+        && (d.distanceM == null || (d.distanceM is number && d.distanceM > 0 && d.distanceM <= 100000))
+        && d.mode in ['two-phone', 'single-phone']
+        && (!('signal' in d) || d.signal == null || d.signal in ['sound', 'flash'])
+        && d.place is int && d.place >= 1 && d.place <= 500
+        && d.time is number && d.time >= 0 && d.time < 100000
+        && d.official is number && d.official >= 0 && d.official < 100000
+        && (!('reaction' in d) || d.reaction == null || (d.reaction is number && d.reaction > -100 && d.reaction < 100))
+        && d.falseStart is bool
+        && d.auto is bool
+        && (d.runner == null || (d.runner is string && d.runner.size() > 0 && d.runner.size() <= 128))
+        // taggedTo 只在標記給「別人」時有值，而且一定等於 runner
+        && d.taggedTo == (d.runner != null && d.runner != d.owner ? d.runner : null)
+        && (d.runnerName == null || (d.runnerName is string && d.runnerName.size() <= 40));
+    }
+
+    // 被標記的人把自己的標記拿掉：只能把連結清掉（可以留下名字），其他欄位不能動
+    function untagOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['runner', 'taggedTo', 'runnerName'])
+        && request.resource.data.runner == null
+        && request.resource.data.taggedTo == null
+        && (request.resource.data.runnerName == null || (request.resource.data.runnerName is string && request.resource.data.runnerName.size() <= 40));
+    }
+
+    match /results/{id} {
+      allow read: if signedIn() && (resource.data.owner == me() || resource.data.taggedTo == me());
+      allow create: if signedIn() && validResult(request.resource.data);
+      allow update: if signedIn() && (
+        (resource.data.owner == me() && validResult(request.resource.data) && request.resource.data.raceId == resource.data.raceId)
+        || (resource.data.taggedTo == me() && untagOnly())
+      );
+      allow delete: if signedIn() && resource.data.owner == me();
+    }
+  }
+}

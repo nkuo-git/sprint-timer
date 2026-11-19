@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>短跑計時</title>
+<style>
+  body { margin: 0; background: #0E1116; color: #F2F4F7; font-family: system-ui, -apple-system, "Noto Sans TC", sans-serif; }
+  main { max-width: 420px; margin: 0 auto; padding: 48px 20px; display: flex; flex-direction: column; gap: 18px; }
+  h1 { margin: 0; font-size: 28px; font-weight: 900; }
+  p { margin: 0; font-size: 16px; line-height: 1.7; color: #A3ABB8; }
+  .btn { display: flex; align-items: center; justify-content: center; min-height: 64px; border-radius: 18px; border: 0; background: #FF7A3D; color: #0E1116; font-size: 19px; font-weight: 900; text-decoration: none; font-family: inherit; }
+  .ghost { min-height: 56px; background: #181C23; color: #F2F4F7; border: 1px solid #2A303A; font-size: 16px; font-weight: 700; }
+  .card { background: #181C23; border-radius: 16px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+  code { display: block; font-size: 12px; color: #C5CBD4; word-break: break-all; max-height: 4.5em; overflow: hidden; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>短跑計時</h1>
+
+  <!-- 登入信的連結沒有直接開 App、落到瀏覽器時會到這一頁（網址帶著一次性的登入碼） -->
+  <section id="login" hidden style="display: flex; flex-direction: column; gap: 18px">
+    <p>差一步就登入了。按下面的按鈕回到 App。</p>
+    <a id="open" class="btn" href="#">打開 App 完成登入</a>
+    <div class="card">
+      <p style="font-size: 14px">按鈕沒反應的話：複製登入連結，回到 App 的登入畫面，點「點了連結卻沒有回到 App？」後貼上。</p>
+      <code id="link"></code>
+      <button id="copy" class="btn ghost" type="button">複製登入連結</button>
+    </div>
+    <p style="font-size: 14px">要在裝了「短跑計時」的那支手機上操作。在電腦上看到這一頁的話，請改用手機打開信。</p>
+  </section>
+
+  <section id="plain">
+    <p>手機短跑計時 App 的登入頁。這一頁只有在點了登入信的連結時才用得到。</p>
+  </section>
+</main>
+<script>
+  (function () {
+    var params = new URLSearchParams(location.search);
+    var code = params.get('oobCode');
+    if (!code || params.get('mode') !== 'signIn') return;
+    // 重新組出登入連結（App 只需要裡面的登入碼）
+    var path = '/__/auth/action?mode=signIn&oobCode=' + encodeURIComponent(code);
+    var link = 'https://' + location.host + path;
+    document.getElementById('plain').hidden = true;
+    document.getElementById('login').hidden = false;
+    document.getElementById('link').textContent = link;
+    // Android：指定套件名稱，直接交給 App 處理這個網址
+    document.getElementById('open').href = 'intent://' + location.host + path + '#Intent;scheme=https;package=com.nkuo.sprinttimer;end';
+    document.getElementById('copy').addEventListener('click', function () {
+      var btn = this;
+      var done = function () { btn.textContent = '已複製，回到 App 貼上'; };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(link).then(done, fallback);
+      else fallback();
+      function fallback() {
+        var range = document.createRange();
+        range.selectNodeContents(document.getElementById('link'));
+        var sel = getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        try { if (document.execCommand('copy')) done(); } catch (e) {}
+      }
+    });
+  })();
+</script>
+</body>
+</html>

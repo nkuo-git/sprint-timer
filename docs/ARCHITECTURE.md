@@ -162,22 +162,23 @@ modules/precision-clock/android/.../shared/GunPlayer.kt   手機和手錶共用�
 
 ## 帳號、雲端紀錄、標記跑者
 
-不登入也能計時；登入後成績同步到雲端（Supabase，設定見 `supabase/README.md`）。
+不登入也能計時；登入後成績同步到雲端（Firebase，設定與登入流程見 `firebase/README.md`）。
 
-- `src/cloud/client.ts`：只用 `fetch` 的 Supabase 用戶端。Email 驗證碼登入（`requestCode` → `verifyCode`）、憑證自動換新、REST 讀寫。沒有用 supabase-js，方便在 Node 測試。
+- `src/cloud/client.ts`：只用 `fetch` 的 Firebase 用戶端。Email 連結登入（`requestLink` → 使用者點信裡的連結 → `signInWithLink`）、憑證自動換新、Firestore 讀寫（`getDoc`、`query`、`commit`）。沒有用 Firebase SDK，App 不用多裝原生套件，也方便在 Node 測試。
+- `src/cloud/values.ts`：Firestore REST 資料格式的轉換。
 - `src/cloud/profile.ts`：暱稱（檢查、儲存、是否被用掉）、找人（暱稱或完整 Email）、取消標記、刪除帳號。
 - `src/records/store.ts`：手機上的紀錄（一個 JSON 檔）。成績一律先存這裡，`dirty` 表示還沒上傳。`myResults()` 合併「自己計時並標記為自己」和「別人標記給我」的成績。
-- `src/records/sync.ts`：先上傳 `dirty` 的比賽，再抓雲端的。本機未上傳的修改優先；`rev` 用來避免上傳途中的修改被當成已上傳。
+- `src/records/sync.ts`：先上傳 `dirty` 的比賽，再抓雲端的。本機未上傳的修改優先；`rev` 用來避免上傳途中的修改被當成已上傳。存完成績只上傳（`sync('push')`），開 App、回到 App、手動重新整理才把雲端的抓回來，省 Firestore 的讀取量。
 - `src/records/draft.ts`：成績畫面的暫存。每位跑者標記給誰（自己／用戶／只寫名字），同一位跑者重複儲存用同一個成績 id。
-- `src/account/service.ts`：把以上串起來給畫面用（登入狀態、暱稱、同步狀態、待上傳數量）。
+- `src/account/service.ts`：把以上串起來給畫面用（登入狀態、等待中的登入信、暱稱、同步狀態、待上傳數量）。`handleLink()` 接手打開 App 的登入連結。
 
 成績由終點那支手機儲存（雙手機的終點機、單手機）。起點手機與手錶不存。
 
-資料表：`profiles`（暱稱）、`races`（一趟，owner = 計時的人）、`results`（每位跑者一筆，`runner` = 被標記的帳號，`runner_name` = 非用戶的名字）。
-權限：計時的人可讀寫整趟；被標記的人只讀得到自己的那一筆和那一趟的日期距離；Email 不對外，只能用完整地址查到對應的暱稱。
+資料（Firestore）：`users`（暱稱）、`nicknames`（保證不重複）、`emails`（用完整 Email 找人）、`results`（每位跑者一份文件，帶著那一趟的日期距離；`owner` = 計時的人，`runner` = 被標記的帳號，`runnerName` = 非用戶的名字）。
+權限（`firestore.rules`）：計時的人可讀寫自己計時的成績；被標記的人只讀得到自己的那一筆，並且可以把自己的標記拿掉；Email 不能列出，只能用完整地址查到對應的帳號。
 
-測試：`test/cloud.test.ts`、`test/records.test.ts`、`test/account.test.ts` 用 `test/fakeCloud.ts`（照 RLS 規則實作的假雲端）；`scripts/test-db.sh` 在真的 PostgreSQL 上驗證 RLS。
+測試：`test/cloud.test.ts`、`test/records.test.ts`、`test/account.test.ts` 透過 `test/testCloud.ts` 跑兩種雲端：平常是 `test/fakeFirebase.ts`（照規則實作的假雲端），`npm run test:cloud` 則連 Firebase 模擬器，用真的 `firestore.rules` 再跑一次。
 
-畫面（設計稿 16 到 23）：`src/account/AccountContext.tsx`（`useAccount()`）、`src/screens/Login.tsx`（Email 與驗證碼）、`Nickname.tsx`、`Account.tsx`、`History.tsx`、`src/ui/PickRunner.tsx`（選擇跑者面板與標記膠囊）。
+畫面（設計稿 16 到 23）：`src/account/AccountContext.tsx`（`useAccount()`）、`src/screens/Login.tsx`（輸入 Email、等使用者點登入連結，也可以手動貼上連結）、`Nickname.tsx`、`Account.tsx`、`History.tsx`、`src/ui/PickRunner.tsx`（選擇跑者面板與標記膠囊）。
 多人成績（`src/ui/HandheldFinish.tsx` 的 `MultiResults`）每次變動都呼叫 `service.saveRace(draft.toRace(...))`；雙手機模式在成績畫面選距離。
 `cloud.config.json` 是空的時候，登入入口不顯示，成績只存在手機。

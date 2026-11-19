@@ -1,49 +1,53 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, Text, TextInput, View } from 'react-native';
 import { useAccount } from '../account/AccountContext';
-import { isValidEmail, normalizeEmail } from '../cloud/client';
+import { isLoginLink, isValidEmail } from '../cloud/client';
 import { Banner, Btn, C, Header, NUM, s } from '../ui/kit';
 
-const CODE_LEN = 6;
 const RESEND_AFTER_S = 60;
 
-/** 設計稿「17 登入：輸入 Email」與「18 登入：輸入驗證碼」 */
+/** 設計稿「17 登入：輸入 Email」與「18 登入：到信箱點連結」 */
 export function Login({ onBack, onDone }: { onBack(): void; onDone(): void }) {
-  const { service } = useAccount();
+  const { account, service } = useAccount();
   const [email, setEmail] = useState('');
-  const [step, setStep] = useState<'email' | 'code'>('email');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const [sentAt, setSentAt] = useState(0);
 
-  const send = async () => {
+  // 點了信裡的連結、登入完成：離開登入畫面
+  useEffect(() => {
+    if (account.user) onDone();
+  }, [account.user, onDone]);
+  // 離開登入畫面時，上次點連結失敗的訊息不用留著
+  useEffect(() => () => service.clearLinkError(), [service]);
+
+  const send = async (to: string) => {
     setError('');
     setSending(true);
     try {
-      await service.requestCode(email);
+      await service.requestLink(to);
       setSentAt(Date.now());
-      setStep('code');
-      return true;
     } catch (e: any) {
       setError(e?.message ?? String(e));
-      return false;
     } finally {
       setSending(false);
     }
   };
 
-  if (step === 'code') {
+  // 登入信已寄出（包含寄出後 App 被關掉再打開）：等使用者去點連結
+  if (account.pendingEmail) {
     return (
-      <Verify
-        email={normalizeEmail(email)}
+      <CheckMail
+        email={account.pendingEmail}
         sentAt={sentAt}
-        resend={send}
+        resending={sending}
+        resend={() => send(account.pendingEmail!)}
         resendError={error}
         onBack={() => {
           setError('');
-          setStep('email');
+          setEmail(account.pendingEmail ?? '');
+          void service.cancelLogin();
         }}
-        onDone={onDone}
       />
     );
   }
@@ -55,7 +59,7 @@ export function Login({ onBack, onDone }: { onBack(): void; onDone(): void }) {
         <Header onBack={onBack} />
         <View style={{ gap: 8, paddingTop: 8 }}>
           <Text style={{ color: C.text, fontSize: 28, fontWeight: '900' }}>用 Email 登入</Text>
-          <Text style={{ color: C.dim, fontSize: 16, lineHeight: 26 }}>不用密碼。我們會寄一封認證信到你的信箱，裡面有 6 位數驗證碼。</Text>
+          <Text style={{ color: C.dim, fontSize: 16, lineHeight: 26 }}>不用密碼。我們會寄一封登入信到你的信箱，在這支手機上點信裡的連結就登入了。</Text>
         </View>
 
         <View style={{ gap: 8 }}>
@@ -75,14 +79,14 @@ export function Login({ onBack, onDone }: { onBack(): void; onDone(): void }) {
             textContentType="emailAddress"
             autoFocus
             returnKeyType="send"
-            onSubmitEditing={() => valid && !sending && send()}
+            onSubmitEditing={() => valid && !sending && send(email)}
             accessibilityLabel="Email"
             style={{ minHeight: 60, borderRadius: 16, borderWidth: 2, borderColor: C.info, backgroundColor: C.card, color: C.text, fontSize: 19, paddingHorizontal: 16 }}
           />
         </View>
 
-        {error ? <Banner tone="bad" text={error} /> : null}
-        <Btn title={sending ? '寄送中…' : '寄認證信'} onPress={send} disabled={!valid || sending} style={{ minHeight: 64, borderRadius: 18 }} textStyle={{ fontSize: 19, fontWeight: '900' }} />
+        {account.signingIn ? <Banner text="登入中…" /> : error || account.linkError ? <Banner tone="bad" text={error || account.linkError || ''} /> : null}
+        <Btn title={sending ? '寄送中…' : '寄登入信'} onPress={() => send(email)} disabled={!valid || sending} style={{ minHeight: 64, borderRadius: 18 }} textStyle={{ fontSize: 19, fontWeight: '900' }} />
         <Text style={{ color: C.dim, fontSize: 14, lineHeight: 24 }}>第一次登入會自動建立帳號。換新手機時用同一個 Email 登入，紀錄就會回來。</Text>
 
         <View style={{ flex: 1 }} />
@@ -96,14 +100,15 @@ export function Login({ onBack, onDone }: { onBack(): void; onDone(): void }) {
   );
 }
 
-function Verify({ email, sentAt, resend, resendError, onBack, onDone }: { email: string; sentAt: number; resend(): Promise<boolean>; resendError: string; onBack(): void; onDone(): void }) {
-  const { service } = useAccount();
-  const input = useRef<React.ComponentRef<typeof TextInput>>(null);
-  const [code, setCode] = useState('');
-  const [state, setState] = useState<'typing' | 'checking' | 'wrong'>('typing');
-  const [error, setError] = useState('');
+const STEPS = ['在這支手機上打開信箱，找到剛寄來的登入信', '點信裡的「登入」連結', '手機會自動回到這裡，登入就完成了'];
+
+/** 等使用者到信箱點連結。點了以後手機會用那個連結打開 App（AccountContext 接手登入），這個畫面只顯示狀態。 */
+function CheckMail({ email, sentAt, resending, resend, resendError, onBack }: { email: string; sentAt: number; resending: boolean; resend(): Promise<void>; resendError: string; onBack(): void }) {
+  const { account, service } = useAccount();
   const [now, setNow] = useState(Date.now());
-  const [resending, setResending] = useState(false);
+  const [pasting, setPasting] = useState(false);
+  const [link, setLink] = useState('');
+  const [pasteError, setPasteError] = useState('');
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -111,100 +116,80 @@ function Verify({ email, sentAt, resend, resendError, onBack, onDone }: { email:
   }, []);
   const wait = Math.max(0, RESEND_AFTER_S - Math.floor((now - sentAt) / 1000));
 
-  const submit = async (value: string) => {
-    setState('checking');
-    setError('');
+  const failed = account.linkError ?? (pasteError || null);
+  const busy = account.signingIn;
+  const canResend = (wait === 0 || !!failed) && !resending && !busy;
+
+  const submit = async () => {
+    setPasteError('');
+    if (!isLoginLink(link)) {
+      setPasteError('這不是登入信裡的連結。請在信裡長按「登入」連結，複製連結網址後再貼上。');
+      return;
+    }
     try {
-      await service.verifyCode(email, value);
-      onDone();
+      await service.signInWithLink(link);
     } catch (e: any) {
-      // 驗證碼錯誤用畫面上固定的說明；其他狀況（沒網路、太頻繁）顯示原因
-      setError(e?.kind === 'invalid' ? '' : (e?.message ?? String(e)));
-      setState('wrong');
+      setPasteError(e?.message ?? String(e));
     }
   };
 
-  const onChange = (t: string) => {
-    if (state === 'checking') return;
-    const digits = t.replace(/\D/g, '').slice(0, CODE_LEN);
-    setCode(digits);
-    setState('typing');
-    if (digits.length === CODE_LEN) void submit(digits);
-  };
-
-  const again = async () => {
-    setResending(true);
-    setCode('');
-    setState('typing');
-    setError('');
-    await resend();
-    setResending(false);
-    input.current?.focus();
-  };
-
-  const wrong = state === 'wrong';
-  const canResend = (wait === 0 || wrong) && !resending && state !== 'checking';
   return (
     <KeyboardAvoidingView style={s.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={[s.pad, { gap: 20, flexGrow: 1 }]} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={[s.pad, { gap: 18, flexGrow: 1 }]} keyboardShouldPersistTaps="handled">
         <Header onBack={onBack} />
         <View style={{ gap: 8, paddingTop: 8 }}>
-          <Text style={{ color: C.text, fontSize: 28, fontWeight: '900' }}>輸入驗證碼</Text>
-          <Text style={{ color: C.dim, fontSize: 16, lineHeight: 26 }}>認證信已寄到</Text>
+          <Text style={{ color: C.text, fontSize: 28, fontWeight: '900' }}>到信箱點登入連結</Text>
+          <Text style={{ color: C.dim, fontSize: 16, lineHeight: 26 }}>登入信已寄到</Text>
           <Text style={{ color: C.text, fontSize: 18, fontWeight: '700' }} numberOfLines={1} adjustsFontSizeToFit>
             {email}
           </Text>
         </View>
 
-        <View>
-          <View style={[s.row, { gap: 8 }]} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
-            {Array.from({ length: CODE_LEN }, (_, i) => (
-              <View
-                key={i}
-                style={{
-                  flex: 1,
-                  height: 68,
-                  borderRadius: 14,
-                  backgroundColor: C.card,
-                  borderWidth: 2,
-                  borderColor: wrong ? C.bad : i === code.length && state === 'typing' ? C.info : C.line,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <Text style={[NUM, { color: wrong ? C.badText : C.text, fontSize: 32, fontWeight: '700' }]}>{code[i] ?? ''}</Text>
+        <View style={[s.card, { gap: 14 }]}>
+          {STEPS.map((text, i) => (
+            <View key={i} style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start' }}>
+              <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: C.infoBg, alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={[NUM, { color: C.infoText, fontSize: 15, fontWeight: '700' }]}>{i + 1}</Text>
               </View>
-            ))}
-          </View>
-          {/* 透明的輸入框蓋在格子上：點格子就叫出數字鍵盤，也能接手機自動填入的驗證碼 */}
-          <TextInput
-            ref={input}
-            value={code}
-            onChangeText={onChange}
-            keyboardType="number-pad"
-            maxLength={CODE_LEN}
-            autoFocus
-            caretHidden
-            textContentType="oneTimeCode"
-            autoComplete={Platform.OS === 'android' ? 'sms-otp' : 'one-time-code'}
-            accessibilityLabel="6 位數驗證碼"
-            style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, opacity: 0.02, color: 'transparent', fontSize: 1 }}
-          />
+              <Text style={{ flex: 1, color: C.text, fontSize: 16, lineHeight: 26 }}>{text}</Text>
+            </View>
+          ))}
         </View>
 
-        {wrong ? <Banner tone="bad" text={error || '驗證碼不對或已過期。請再看一次信，或重寄一封。'} /> : null}
-        {state === 'checking' ? <Banner text="確認中…" /> : null}
-        {state === 'typing' ? <Text style={{ color: C.dim, fontSize: 14, lineHeight: 24 }}>輸入完 6 個數字會自動登入。驗證碼 1 小時內有效。沒看到信的話，找找垃圾信件匣。</Text> : null}
-        {resendError && state === 'typing' ? <Banner tone="bad" text={resendError} /> : null}
+        {busy ? <Banner text="登入中…" /> : failed ? <Banner tone="bad" text={failed} /> : pasting ? null : <Text style={{ color: C.dim, fontSize: 14, lineHeight: 24 }}>沒看到信的話，找找垃圾信件匣。連結只能用一次。</Text>}
+        {resendError && !busy ? <Banner tone="bad" text={resendError} /> : null}
+
+        {pasting ? (
+          <View style={{ gap: 8 }}>
+            <Text style={{ color: C.soft, fontSize: 15, fontWeight: '700' }}>貼上信裡的登入連結</Text>
+            <TextInput
+              value={link}
+              onChangeText={(t) => {
+                setLink(t);
+                setPasteError('');
+              }}
+              placeholder="長按這裡 → 貼上"
+              placeholderTextColor={C.faint}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              accessibilityLabel="登入連結"
+              style={{ minHeight: 56, borderRadius: 16, borderWidth: 2, borderColor: C.info, backgroundColor: C.card, color: C.text, fontSize: 16, paddingHorizontal: 16 }}
+            />
+            <Text style={{ color: C.dim, fontSize: 14, lineHeight: 24 }}>在信裡長按「登入」連結 → 複製連結網址，再回到這裡貼上。</Text>
+            <Btn title="登入" onPress={submit} disabled={!link.trim() || busy} style={{ minHeight: 56, borderRadius: 16 }} textStyle={{ fontSize: 17, fontWeight: '900' }} />
+          </View>
+        ) : null}
 
         <View style={{ gap: 4 }}>
           <Btn
             kind="ghost"
-            title={resending ? '寄送中…' : canResend || wait === 0 ? '重寄認證信' : `重寄認證信（${wait} 秒後）`}
-            onPress={again}
+            title={resending ? '寄送中…' : canResend || wait === 0 ? '重寄登入信' : `重寄登入信（${wait} 秒後）`}
+            onPress={() => void resend()}
             disabled={!canResend}
             textStyle={{ fontSize: 16, fontWeight: '700' }}
           />
+          {!pasting && !busy ? <Btn kind="plain" title="點了連結卻沒有回到 App？" onPress={() => setPasting(true)} textStyle={{ fontSize: 16 }} /> : null}
           <Btn kind="plain" title="換一個 Email" onPress={onBack} textStyle={{ fontSize: 16 }} />
         </View>
       </ScrollView>

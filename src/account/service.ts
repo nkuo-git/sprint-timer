@@ -1,6 +1,6 @@
-import { CloudClient, type CloudUser, type FetchLike, type SessionStorage } from '../cloud/client';
+import { CloudClient, isLoginLink, type CloudUser, type FetchLike, type SessionStorage } from '../cloud/client';
 import { cloudConfigured, type CloudConfig } from '../cloud/config';
-import { deleteAccount, fetchMyNickname, nicknameAvailable, saveNickname, searchPeople, untagMe, type Person } from '../cloud/profile';
+import { deleteAccount, fetchMyNickname, nicknameAvailable, registerEmail, saveNickname, searchPeople, untagMe, type Person } from '../cloud/profile';
 import { RecordStore, type Persistence, type RaceInput } from '../records/store';
 import { RecordSync, type SyncStatus } from '../records/sync';
 
@@ -10,6 +10,12 @@ export interface AccountSnapshot {
   /** 有設定雲端專案（沒有的話不顯示登入相關功能） */
   cloudEnabled: boolean;
   user: CloudUser | null;
+  /** 登入信已寄出、等使用者點信裡連結的 Email（沒有在等就是 null） */
+  pendingEmail: string | null;
+  /** 點了登入連結但登入失敗的原因（顯示在登入畫面） */
+  linkError: string | null;
+  /** 正在用登入連結登入 */
+  signingIn: boolean;
   nickname: string | null;
   /** 已登入但還沒取暱稱（要先到取暱稱畫面） */
   needsNickname: boolean;
@@ -35,6 +41,8 @@ export class AccountService {
   private nicknameKnown = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private recordsRev = 0;
+  private linkError: string | null = null;
+  private signingIn = false;
   private snap: AccountSnapshot;
 
   constructor(deps: { config: CloudConfig; fetch: FetchLike; sessionStorage: SessionStorage; records: Persistence; now?: () => number }) {
@@ -69,6 +77,9 @@ export class AccountService {
       ready: this.ready,
       cloudEnabled: !!this.cloud,
       user,
+      pendingEmail: user ? null : (this.cloud?.pendingEmail ?? null),
+      linkError: this.linkError,
+      signingIn: this.signingIn,
       nickname,
       needsNickname: !!user && this.nicknameKnown && nickname === null,
       sync: this.sync?.status ?? { state: 'idle', lastOk: null },
@@ -83,6 +94,9 @@ export class AccountService {
     const same =
       prev.ready === next.ready &&
       prev.user?.id === next.user?.id &&
+      prev.pendingEmail === next.pendingEmail &&
+      prev.linkError === next.linkError &&
+      prev.signingIn === next.signingIn &&
       prev.nickname === next.nickname &&
       prev.needsNickname === next.needsNickname &&
       prev.sync === next.sync &&
@@ -121,17 +135,64 @@ export class AccountService {
     await this.store.commit();
   }
 
-  requestCode(email: string): Promise<void> {
-    return this.need().requestCode(email);
+  /** 寄登入信。之後使用者在這支手機點信裡的連結，App 會收到連結並呼叫 handleLink()。 */
+  async requestLink(email: string): Promise<void> {
+    this.linkError = null;
+    await this.need().requestLink(email);
+    this.emit();
   }
 
-  /** 輸入驗證碼登入。成功後會知道有沒有暱稱（needsNickname），並開始同步。 */
-  async verifyCode(email: string, code: string): Promise<void> {
-    await this.need().verifyCode(email, code);
+  /** 離開登入畫面時清掉上次點連結失敗的訊息 */
+  clearLinkError(): void {
+    if (!this.linkError) return;
+    this.linkError = null;
+    this.emit();
+  }
+
+  /** 放棄等待中的登入（回上一步改 Email） */
+  async cancelLogin(): Promise<void> {
+    this.linkError = null;
+    await this.cloud?.cancelPending();
+    this.emit();
+  }
+
+  /**
+   * 用登入信裡的連結登入（使用者貼上連結時呼叫；失敗會丟出錯誤）。
+   * 成功後會知道有沒有暱稱（needsNickname），並開始同步。
+   */
+  async signInWithLink(link: string, email?: string): Promise<void> {
+    const cloud = this.need();
+    this.signingIn = true;
+    this.linkError = null;
+    this.emit();
+    try {
+      await cloud.signInWithLink(link, email);
+    } finally {
+      this.signingIn = false;
+      this.emit();
+    }
     this.nicknameKnown = false;
     // 剛登入就斷線的話，暱稱等下次 refresh() 再補
     await this.loadNickname().catch(() => undefined);
+    void registerEmail(cloud).catch(() => undefined);
     void this.sync!.sync();
+  }
+
+  /**
+   * App 被一個網址打開時呼叫。是登入連結就拿來登入，回傳 true；不是就回傳 false。
+   * 不會丟出錯誤：失敗原因放在 snapshot 的 linkError。
+   */
+  async handleLink(url: string | null | undefined): Promise<boolean> {
+    if (!this.cloud || !isLoginLink(url)) return false;
+    // 已經登入了（例如同一封信的連結點了第二次）：不用再登入
+    if (this.uid) return true;
+    try {
+      await this.signInWithLink(url);
+    } catch (e: any) {
+      this.linkError = e?.message ?? '登入失敗';
+      this.emit();
+    }
+    return true;
   }
 
   /** 暱稱有沒有被別人用掉 */
@@ -181,7 +242,7 @@ export class AccountService {
 
   /** 把別人標記給我的成績從我的紀錄拿掉 */
   async untag(resultId: string): Promise<void> {
-    await untagMe(this.need(), resultId);
+    await untagMe(this.need(), resultId, this.snap.nickname);
     await this.sync!.sync();
   }
 
@@ -201,7 +262,8 @@ export class AccountService {
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       this.timer = null;
-      void this.sync!.sync();
+      // 存完成績只上傳；把雲端的抓回來留給開 App、回到 App、手動重新整理時做
+      void this.sync!.sync('push');
     }, SYNC_DELAY_MS);
   }
 

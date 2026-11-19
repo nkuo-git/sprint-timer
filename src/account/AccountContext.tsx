@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useSyncExternalStore } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Linking } from 'react-native';
 import { CLOUD } from '../cloud/config';
 import { fileStorage } from '../storage/fileStorage';
 import { AccountService, type AccountSnapshot } from './service';
@@ -16,15 +16,24 @@ function createService(): AccountService {
   });
 }
 
-/** 包在 App 最外層：啟動時讀回登入狀態與紀錄，回到 App 時自動同步 */
+/** 包在 App 最外層：啟動時讀回登入狀態與紀錄，回到 App 時自動同步，並接手登入信的連結 */
 export function AccountProvider({ children }: { children: React.ReactNode }) {
   const [service] = useState(createService);
   useEffect(() => {
-    void service.start();
+    // 使用者點了登入信裡的連結：手機用那個網址打開 App（App 還沒開的話從 getInitialURL 拿到）
+    void service
+      .start()
+      .then(() => Linking.getInitialURL())
+      .then((url) => service.handleLink(url))
+      .catch(() => undefined);
+    const link = Linking.addEventListener('url', ({ url }) => void service.handleLink(url));
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') void service.refresh();
     });
-    return () => sub.remove();
+    return () => {
+      link.remove();
+      sub.remove();
+    };
   }, [service]);
   return <Ctx.Provider value={service}>{children}</Ctx.Provider>;
 }

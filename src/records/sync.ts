@@ -1,9 +1,9 @@
-import { isOffline, type CloudClient } from '../cloud/client';
+import { isOffline, type CloudClient, type Doc, type Write } from '../cloud/client';
+import type { Fields } from '../cloud/values';
 import type { RecordStore } from './store';
 import type { Runner, StoredRace, StoredResult, TaggedResult } from './types';
 
-const PAGE = 1000;
-
+export type SyncMode = 'full' | 'push';
 export type SyncState = 'idle' | 'syncing' | 'offline' | 'error';
 
 export interface SyncStatus {
@@ -20,7 +20,7 @@ export interface SyncStatus {
 export class RecordSync {
   status: SyncStatus = { state: 'idle', lastOk: null };
   private running: Promise<void> | null = null;
-  private again = false;
+  private again: SyncMode | null = null;
   private listeners = new Set<() => void>();
 
   constructor(
@@ -39,18 +39,23 @@ export class RecordSync {
     for (const fn of this.listeners) fn();
   }
 
-  /** 同步一次。已經在同步中就排在後面再跑一次，確保剛存的修改也會上傳。不會丟出錯誤，結果看 status。 */
-  sync(): Promise<void> {
+  /**
+   * 同步一次。mode 'push' 只上傳本機的修改（存完成績後用，省雲端讀取量）；'full' 還會把雲端的抓回來。
+   * 已經在同步中就排在後面再跑一次，確保剛存的修改也會上傳。不會丟出錯誤，結果看 status。
+   */
+  sync(mode: SyncMode = 'full'): Promise<void> {
     if (this.running) {
-      this.again = true;
+      if (this.again !== 'full') this.again = mode;
       return this.running;
     }
     this.running = (async () => {
       try {
-        do {
-          this.again = false;
-          await this.once();
-        } while (this.again);
+        let next: SyncMode | null = mode;
+        while (next) {
+          this.again = null;
+          await this.once(next);
+          next = this.again;
+        }
       } finally {
         this.running = null;
       }
@@ -58,13 +63,13 @@ export class RecordSync {
     return this.running;
   }
 
-  private async once() {
+  private async once(mode: SyncMode) {
     const uid = this.cloud.user?.id;
     if (!uid) return;
     this.set({ ...this.status, state: 'syncing', error: undefined });
     try {
       await this.push(uid);
-      await this.pull(uid);
+      if (mode === 'full') await this.pull(uid);
       await this.store.commit();
       this.set({ state: 'idle', lastOk: this.now() });
     } catch (e: any) {
@@ -80,143 +85,140 @@ export class RecordSync {
     const todo = this.store.data.races.filter((r) => r.dirty && (r.owner === null || r.owner === uid));
     for (const race of todo) {
       const rev = race.rev;
+      // 雲端上這趟現在有哪些成績：已經被刪掉的要一起刪
+      const remote = await this.cloud.query('results', [
+        ['owner', '==', uid],
+        ['raceId', '==', race.id],
+      ]);
       if (race.deleted) {
-        await this.cloud.remove('races', { id: `eq.${race.id}` });
+        await this.cloud.commit(remote.map((d): Write => ({ delete: `results/${d.id}` })));
         if (race.rev === rev) this.store.data.races = this.store.data.races.filter((r) => r !== race);
         continue;
       }
-      await this.cloud.upsert('races', {
-        id: race.id,
-        owner: uid,
-        ran_at: race.ranAt,
-        distance_m: race.distanceM,
-        mode: race.mode,
-        signal: race.signal ?? null,
-      });
-      const rows = race.results.map((r) => toRow(r, race.id, uid));
-      if (rows.length) await this.cloud.upsert('results', rows);
-      // 這趟裡已經被刪掉的成績，雲端也要刪
-      await this.cloud.remove('results', {
-        race_id: `eq.${race.id}`,
-        ...(rows.length ? { id: `not.in.(${rows.map((r) => r.id).join(',')})` } : {}),
-      });
+      const keep = new Set(race.results.map((r) => r.id));
+      // 一趟比賽的所有成績一次送出：全部成功或全部不變
+      await this.cloud.commit([
+        ...race.results.map((r): Write => ({ set: `results/${r.id}`, data: toFields(r, race, uid) })),
+        ...remote.filter((d) => !keep.has(d.id)).map((d): Write => ({ delete: `results/${d.id}` })),
+      ]);
       race.owner = uid;
       if (race.rev === rev) race.dirty = false;
     }
   }
 
   private async pull(uid: string) {
-    // 1. 我計時的比賽
-    const remote = await this.cloud.select<any>('races', {
-      select: 'id,owner,ran_at,distance_m,mode,signal,results(id,place,time_s,official_s,reaction_s,false_start,auto,runner,runner_name)',
-      owner: `eq.${uid}`,
-      order: 'ran_at.desc',
-      limit: PAGE,
-    });
+    // 1. 我計時的成績（每筆成績一份文件，帶著那一趟的時間、距離等資料），依比賽分組
+    const owned = await this.cloud.query('results', [['owner', '==', uid]]);
+    const byRace = new Map<string, Doc[]>();
+    for (const d of owned) {
+      const raceId = String(d.data.raceId ?? '');
+      if (!raceId) continue;
+      byRace.set(raceId, [...(byRace.get(raceId) ?? []), d]);
+    }
     // 2. 別人標記給我的成績
-    const taggedRows = await this.cloud.select<any>('results', {
-      select: 'id,place,time_s,official_s,reaction_s,false_start,race:races!inner(id,owner,ran_at,distance_m,mode)',
-      runner: `eq.${uid}`,
-      limit: PAGE,
-    });
-    const others = taggedRows.filter((t) => t.race && t.race.owner !== uid);
+    const others = (await this.cloud.query('results', [['taggedTo', '==', uid]])).filter((d) => d.data.owner !== uid && typeof d.data.owner === 'string');
 
     // 3. 用到的暱稱（被我標記的人、幫我計時的人）
     const ids = new Set<string>();
-    for (const race of remote) for (const r of race.results ?? []) if (r.runner && r.runner !== uid) ids.add(r.runner);
-    for (const t of others) ids.add(t.race.owner);
-    const names = await this.nicknames([...ids]);
+    for (const d of owned) if (typeof d.data.runner === 'string' && d.data.runner !== uid) ids.add(d.data.runner);
+    for (const d of others) ids.add(d.data.owner as string);
+    const names = new Map<string, string>();
+    for (const d of await this.cloud.getDocs([...ids].map((id) => `users/${id}`))) {
+      if (typeof d.data.nickname === 'string') names.set(d.id, d.data.nickname);
+    }
 
     // 登入的帳號在抓資料途中換了：這批資料不是現在這個人的，丟掉
     if (this.cloud.user?.id !== uid) return;
 
-    const remoteIds = new Set<string>();
-    for (const row of remote) {
-      remoteIds.add(row.id);
-      const local = this.store.race(row.id);
+    for (const [raceId, docs] of byRace) {
+      const local = this.store.race(raceId);
       if (local?.dirty) continue;
-      const race = fromRow(row, uid, names);
+      const race = toRace(raceId, docs, uid, names);
       if (local) Object.assign(local, race, { rev: local.rev });
       else this.store.data.races.push(race);
       for (const r of race.results) if (r.runner?.kind === 'user') this.store.touchRecent({ id: r.runner.id, nickname: r.runner.nickname, at: race.ranAt });
     }
-    // 雲端已經沒有的（在另一支手機刪掉了）本機也拿掉。抓到上限時無法判斷，就不刪。
-    if (remote.length < PAGE) {
-      this.store.data.races = this.store.data.races.filter((r) => r.owner !== uid || r.dirty || remoteIds.has(r.id));
-    }
+    // 雲端已經沒有的（在另一支手機刪掉了）本機也拿掉
+    this.store.data.races = this.store.data.races.filter((r) => r.owner !== uid || r.dirty || byRace.has(r.id));
 
-    const tagged: TaggedResult[] = others.map((t) => ({
-      resultId: t.id,
-      raceId: t.race.id,
-      ranAt: new Date(t.race.ran_at).toISOString(),
-      distanceM: num(t.race.distance_m),
-      mode: t.race.mode,
-      place: t.place,
-      time: Number(t.time_s),
-      official: Number(t.official_s),
-      reaction: num(t.reaction_s) ?? undefined,
-      falseStart: t.false_start || undefined,
-      timerId: t.race.owner,
-      timerNickname: names.get(t.race.owner) ?? null,
-    }));
+    const tagged: TaggedResult[] = others.map((d) => {
+      const x = d.data;
+      const owner = x.owner as string;
+      return {
+        resultId: d.id,
+        raceId: String(x.raceId ?? ''),
+        ranAt: isoTime(x.ranAt),
+        distanceM: num(x.distanceM),
+        mode: x.mode === 'two-phone' ? 'two-phone' : 'single-phone',
+        place: num(x.place) ?? 1,
+        time: num(x.time) ?? 0,
+        official: num(x.official) ?? 0,
+        reaction: num(x.reaction) ?? undefined,
+        falseStart: x.falseStart === true || undefined,
+        timerId: owner,
+        timerNickname: names.get(owner) ?? null,
+      };
+    });
     this.store.setTagged(tagged);
-  }
-
-  private async nicknames(ids: string[]): Promise<Map<string, string>> {
-    const out = new Map<string, string>();
-    for (let i = 0; i < ids.length; i += 100) {
-      const rows = await this.cloud.select<{ id: string; nickname: string }>('profiles', {
-        select: 'id,nickname',
-        id: `in.(${ids.slice(i, i + 100).join(',')})`,
-      });
-      for (const r of rows) out.set(r.id, r.nickname);
-    }
-    return out;
   }
 }
 
-function toRow(r: StoredResult, raceId: string, uid: string) {
-  const runner = r.runner;
+/** 一筆成績在雲端的樣子（results 集合的一份文件）。欄位要和 firestore.rules 的檢查一致。 */
+function toFields(r: StoredResult, race: StoredRace, uid: string): Fields {
+  const runner = r.runner?.kind === 'self' ? uid : r.runner?.kind === 'user' ? r.runner.id : null;
   return {
-    id: r.id,
-    race_id: raceId,
+    owner: uid,
+    raceId: race.id,
+    ranAt: race.ranAt,
+    distanceM: race.distanceM,
+    mode: race.mode,
+    signal: race.signal ?? null,
     place: r.place,
-    time_s: round(r.time, 3),
-    official_s: round(r.official, 2),
-    reaction_s: r.reaction === undefined ? null : round(r.reaction, 3),
-    false_start: !!r.falseStart,
+    time: round(r.time, 3),
+    official: round(r.official, 2),
+    reaction: r.reaction === undefined ? null : round(r.reaction, 3),
+    falseStart: !!r.falseStart,
     auto: r.auto,
-    runner: runner?.kind === 'self' ? uid : runner?.kind === 'user' ? runner.id : null,
-    runner_name: runner?.kind === 'name' ? runner.name.slice(0, 40) : null,
+    runner,
+    // 標記給「別人」時才有值：對方用這個欄位查到自己被標記的成績
+    taggedTo: runner !== null && runner !== uid ? runner : null,
+    runnerName: r.runner?.kind === 'name' ? r.runner.name.slice(0, 40) : null,
   };
 }
 
-function fromRow(row: any, uid: string, names: Map<string, string>): StoredRace {
-  const results: StoredResult[] = (row.results ?? [])
-    .map((r: any): StoredResult => {
+function toRace(raceId: string, docs: Doc[], uid: string, names: Map<string, string>): StoredRace {
+  const results: StoredResult[] = docs
+    .map((d): StoredResult => {
+      const x = d.data;
       let runner: Runner | null = null;
-      if (r.runner === uid) runner = { kind: 'self' };
-      else if (r.runner) runner = { kind: 'user', id: r.runner, nickname: names.get(r.runner) ?? '用戶' };
-      else if (r.runner_name) runner = { kind: 'name', name: r.runner_name };
-      const out: StoredResult = { id: r.id, place: r.place, time: Number(r.time_s), official: Number(r.official_s), auto: !!r.auto, runner };
-      const reaction = num(r.reaction_s);
+      if (x.runner === uid) runner = { kind: 'self' };
+      else if (typeof x.runner === 'string' && x.runner) runner = { kind: 'user', id: x.runner, nickname: names.get(x.runner) ?? '用戶' };
+      else if (typeof x.runnerName === 'string' && x.runnerName) runner = { kind: 'name', name: x.runnerName };
+      const out: StoredResult = { id: d.id, place: num(x.place) ?? 1, time: num(x.time) ?? 0, official: num(x.official) ?? 0, auto: x.auto === true, runner };
+      const reaction = num(x.reaction);
       if (reaction !== null) out.reaction = reaction;
-      if (r.false_start) out.falseStart = true;
+      if (x.falseStart === true) out.falseStart = true;
       return out;
     })
-    .sort((a: StoredResult, b: StoredResult) => a.place - b.place);
+    .sort((a, b) => a.place - b.place);
+  const head = docs[0].data;
   const race: StoredRace = {
-    id: row.id,
-    ranAt: new Date(row.ran_at).toISOString(),
-    distanceM: num(row.distance_m),
-    mode: row.mode,
+    id: raceId,
+    ranAt: isoTime(head.ranAt),
+    distanceM: num(head.distanceM),
+    mode: head.mode === 'two-phone' ? 'two-phone' : 'single-phone',
     results,
     owner: uid,
     dirty: false,
     rev: 1,
   };
-  if (row.signal) race.signal = row.signal;
+  if (head.signal === 'sound' || head.signal === 'flash') race.signal = head.signal;
   return race;
+}
+
+function isoTime(v: unknown): string {
+  const d = new Date(typeof v === 'string' ? v : 0);
+  return Number.isNaN(d.getTime()) ? new Date(0).toISOString() : d.toISOString();
 }
 
 function num(v: unknown): number | null {

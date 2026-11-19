@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useCameraPermission } from 'react-native-vision-camera';
 import { Text, View } from 'react-native';
 import { AccountProvider, useAccount } from './src/account/AccountContext';
@@ -30,6 +30,12 @@ function Screens() {
   const { account } = useAccount();
   const back = () => setRoute('home');
   const timing = TIMING.includes(route);
+
+  // 點了登入信的連結回到 App：登入中或登入失敗時帶到登入畫面看狀態（計時畫面進行中不打斷）
+  const linkActivity = !account.user && (account.signingIn || !!account.linkError);
+  useEffect(() => {
+    if (linkActivity) setRoute((r) => (TIMING.includes(r) ? r : 'login'));
+  }, [linkActivity]);
 
   // 第一次登入要先取暱稱（計時畫面進行中不打斷）
   if (account.needsNickname && !timing) return <Nickname onDone={back} />;

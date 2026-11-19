@@ -11,7 +11,8 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:cloud": "npx -y firebase-tools@15.37.0 emulators:exec --only auth,firestore --project demo-sprint-timer \"FIREBASE_EMULATOR=1 vitest run --no-file-parallelism test/cloud.test.ts test/records.test.ts test/account.test.ts\""
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
