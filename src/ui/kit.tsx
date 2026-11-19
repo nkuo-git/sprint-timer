@@ -268,3 +268,24 @@ export const s = StyleSheet.create({
   big: { color: C.text, fontSize: 56, fontWeight: '700', fontVariant: ['tabular-nums'] },
   title: { color: C.text, fontSize: 22, fontWeight: '700' },
 });
+
+/** 圓形頭像：暱稱的第一個字。me = 自己（橘）、user = 其他用戶（藍）、none = 未標記／非用戶（灰） */
+export function Avatar({ label, size = 36, tone = 'user' }: { label: string; size?: number; tone?: 'me' | 'user' | 'none' }) {
+  const t = { me: { bg: C.accent, fg: C.onAccent }, user: { bg: C.infoBg, fg: C.infoText }, none: { bg: C.raised, fg: C.dim } }[tone];
+  return (
+    <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: t.bg, alignItems: 'center', justifyContent: 'center' }}>
+      <Text style={{ color: t.fg, fontSize: Math.round(size * 0.44), fontWeight: '700' }}>{label}</Text>
+    </View>
+  );
+}
+
+/** 資訊列：藍底（一般）、黃底（提醒）、紅底（錯誤） */
+export function Banner({ text, tone = 'info', children }: { text: string; tone?: 'info' | 'warn' | 'bad'; children?: React.ReactNode }) {
+  const t = { info: { bg: C.infoBg, fg: '#C5DFF7' }, warn: { bg: '#3A2A0C', fg: '#FFE2A6' }, bad: { bg: C.badBg, fg: C.badText } }[tone];
+  return (
+    <View style={{ backgroundColor: t.bg, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 14, gap: 10 }}>
+      <Text style={{ color: t.fg, fontSize: 15, lineHeight: 23 }}>{text}</Text>
+      {children}
+    </View>
+  );
+}

@@ -1,4 +1,5 @@
 import { officialTime } from '../core/physics';
+import { sameRunner } from './format';
 import { uuid, type RaceInput } from './store';
 import type { RaceMode, Runner, StoredResult } from './types';
 
@@ -45,9 +46,7 @@ export class RaceDraft {
       return;
     }
     for (const [id, r] of this.runners) {
-      if (id === markId) continue;
-      const same = (r.kind === 'self' && runner.kind === 'self') || (r.kind === 'user' && runner.kind === 'user' && r.id === runner.id);
-      if (same) this.runners.delete(id);
+      if (id !== markId && sameRunner(r, runner)) this.runners.delete(id);
     }
     this.runners.set(markId, runner.kind === 'name' ? { kind: 'name', name: runner.name.trim().slice(0, 40) } : runner);
   }

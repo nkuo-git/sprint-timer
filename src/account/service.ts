@@ -1,6 +1,6 @@
 import { CloudClient, type CloudUser, type FetchLike, type SessionStorage } from '../cloud/client';
 import { cloudConfigured, type CloudConfig } from '../cloud/config';
-import { deleteAccount, fetchMyNickname, saveNickname, searchPeople, untagMe, type Person } from '../cloud/profile';
+import { deleteAccount, fetchMyNickname, nicknameAvailable, saveNickname, searchPeople, untagMe, type Person } from '../cloud/profile';
 import { RecordStore, type Persistence, type RaceInput } from '../records/store';
 import { RecordSync, type SyncStatus } from '../records/sync';
 
@@ -132,6 +132,16 @@ export class AccountService {
     // 剛登入就斷線的話，暱稱等下次 refresh() 再補
     await this.loadNickname().catch(() => undefined);
     void this.sync!.sync();
+  }
+
+  /** 暱稱有沒有被別人用掉 */
+  nicknameAvailable(nickname: string): Promise<boolean> {
+    return nicknameAvailable(this.need(), nickname);
+  }
+
+  /** 把「別人標記給我」的新成績記為看過 */
+  markTaggedSeen(): Promise<void> {
+    return this.store.markTaggedSeen();
   }
 
   async setNickname(nickname: string): Promise<'ok' | 'taken'> {
