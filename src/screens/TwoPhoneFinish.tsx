@@ -21,6 +21,8 @@ export function TwoPhoneFinish({ onBack }: { onBack(): void }) {
   const [syncErr, setSyncErr] = useState<number | null>(null);
   const [gunLocal, setGunLocal] = useState<number | null>(null);
   const [raceNo, setRaceNo] = useState(1);
+  // 雙手機模式沒有事先設定距離：在成績畫面選，選過之後同一次計時沿用
+  const [distance, setDistance] = useState<number | null>(null);
   const [status, setStatus] = useState('');
   const [result, setResult] = useState<RaceResult | null>(null);
 
@@ -120,7 +122,10 @@ export function TwoPhoneFinish({ onBack }: { onBack(): void }) {
     <HandheldFinish
       ref={hh}
       onBack={onBack}
-      context="雙手機"
+      mode="two-phone"
+      distanceM={distance}
+      onDistanceChange={setDistance}
+      raceExtra={result ? { reaction: result.reaction, falseStart: result.falseStart } : undefined}
       raceNo={raceNo}
       fps={240}
       startAt={gunLocal}

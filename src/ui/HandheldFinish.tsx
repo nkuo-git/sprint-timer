@@ -1,12 +1,17 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { PrecisionClock } from '../../modules/precision-clock';
+import { useAccount } from '../account/AccountContext';
 import { MultiFinishCamera, type MultiFinishHandle, type MultiTelemetry } from '../camera/MultiFinishCamera';
 import { frameToView } from '../camera/mapping';
 import type { FinishEvent } from '../core/multiFinish';
 import type { FinishSession, RunnerMark } from '../finish/session';
 import { useFinishSession } from '../finish/useFinishSession';
-import { Btn, C, Chip, Header, IconBtn, NUM, s } from './kit';
+import { RaceDraft } from '../records/draft';
+import { distanceLabel } from '../records/format';
+import type { RaceMode } from '../records/types';
+import { Btn, C, Chip, Header, IconBtn, NUM, NumField, Segmented, s } from './kit';
+import { PickRunner, RunnerPill } from './PickRunner';
 
 /**
  * 手持終點（設計稿 7 點選終點線、8 計時中、9 多人成績）。
@@ -21,8 +26,15 @@ export interface HandheldHandle {
 
 interface Props {
   onBack(): void;
-  /** 例如「100m · 單手機」 */
-  context: string;
+  /** 存紀錄用：哪一種計時方式 */
+  mode: RaceMode;
+  signal?: 'sound' | 'flash';
+  /** 這一趟的距離（公尺）；還不知道時為 null */
+  distanceM: number | null;
+  /** 有給的話可以在成績畫面改距離（雙手機模式沒有事先設定距離） */
+  onDistanceChange?(meters: number): void;
+  /** 起點手機量到的反應時間。只有一位跑者時才知道是誰的，才會記到成績上 */
+  raceExtra?: { reaction?: number; falseStart?: boolean };
   raceNo: number;
   fps: number;
   torch?: boolean;
@@ -56,8 +68,9 @@ const AIM_TEXT: Record<Aim, { chip: string; tone: string; head: string; body: st
 };
 
 export const HandheldFinish = forwardRef<HandheldHandle, Props>(function HandheldFinish(props, ref) {
-  const { onBack, context, raceNo, fps, torch, startAt, status, chips, idleControls, waitControls, resultNote, onAgain } = props;
+  const { onBack, mode, signal, distanceM, onDistanceChange, raceExtra, raceNo, fps, torch, startAt, status, chips, idleControls, waitControls, resultNote, onAgain } = props;
   const cam = useRef<MultiFinishHandle>(null);
+  const draft = useRef<RaceDraft | null>(null);
   const { session, onEvent, version, refresh } = useFinishSession();
   const latest = useRef(props);
   latest.current = props;
@@ -208,6 +221,11 @@ export const HandheldFinish = forwardRef<HandheldHandle, Props>(function Handhel
               title="全部跑完，看成績"
               onPress={() => {
                 stop();
+                // 這一趟的紀錄從這裡開始：之後在成績畫面的每次修改都存到同一筆
+                const d = new RaceDraft(mode, { distanceM, signal });
+                // 單手機、只有一個人：通常就是自己計時自己，先標記成「我自己」（可以改）
+                if (mode === 'single-phone' && results.length === 1) d.tag(results[0].id, { kind: 'self' });
+                draft.current = d;
                 setShowResults(true);
               }}
               style={{ minHeight: 64, borderColor: C.accent }}
@@ -233,14 +251,17 @@ export const HandheldFinish = forwardRef<HandheldHandle, Props>(function Handhel
         )}
       </View>
 
-      {showResults && startAt !== null ? (
+      {showResults && startAt !== null && draft.current ? (
         <View style={StyleSheet.absoluteFill}>
           <MultiResults
             session={session}
             version={version}
             refresh={refresh}
             startAt={startAt}
-            context={context}
+            draft={draft.current}
+            distanceM={distanceM}
+            onDistanceChange={onDistanceChange}
+            raceExtra={raceExtra}
             raceNo={raceNo}
             note={resultNote}
             nudge={tele && tele.fps > 0 ? 1 / tele.fps : 1 / fps}
@@ -261,13 +282,21 @@ export const HandheldFinish = forwardRef<HandheldHandle, Props>(function Handhel
 const STRIP_H = 150;
 const COL_REPEAT = 2;
 
-/** 設計稿「9 多人成績」：終點照片 + 每位跑者的衝線畫面與時間，可補人、微調、刪除 */
-function MultiResults({
+const DISTANCES = ['60', '100', '200', '400', '自訂'];
+
+/**
+ * 設計稿「9 多人成績」＋「22 標記跑者」：終點照片 + 每位跑者的衝線畫面與時間，可補人、微調、刪除，
+ * 並把每一筆標記給某個人。畫面上每次變動都會存進紀錄（先存手機，有登入就自動上傳）。
+ */
+export function MultiResults({
   session,
   version,
   refresh,
   startAt,
-  context,
+  draft,
+  distanceM,
+  onDistanceChange,
+  raceExtra,
   raceNo,
   note,
   nudge,
@@ -278,7 +307,10 @@ function MultiResults({
   version: number;
   refresh(): void;
   startAt: number;
-  context: string;
+  draft: RaceDraft;
+  distanceM: number | null;
+  onDistanceChange?(meters: number): void;
+  raceExtra?: { reaction?: number; falseStart?: boolean };
   raceNo: number;
   note?: string;
   /** 微調一步的秒數（一格影格） */
@@ -286,9 +318,22 @@ function MultiResults({
   onHome(): void;
   onAgain(): void;
 }) {
+  const { account, service } = useAccount();
   const [editing, setEditing] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
+  const [picking, setPicking] = useState<number | null>(null);
+  const [tagRev, setTagRev] = useState(0);
+  const [distOpen, setDistOpen] = useState(false);
+  const [customDist, setCustomDist] = useState(false);
   const results = session.results(startAt);
+
+  // 成績、標記、距離、反應時間有任何變動就存一次（內容沒變不會重複存）
+  draft.distanceM = distanceM;
+  useEffect(() => {
+    void service.saveRace(draft.toRace(session.results(startAt), raceExtra));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [service, draft, session, startAt, version, tagRev, distanceM, raceExtra?.reaction, raceExtra?.falseStart]);
+
   const marks = new Map<number, RunnerMark>(session.marks.map((m) => [m.id, m]));
 
   // 照片的時間範圍只在進入畫面或新增/刪除跑者時重算，微調時不重產生影像
@@ -317,7 +362,46 @@ function MultiResults({
   return (
     <View style={s.screen}>
       <ScrollView contentContainerStyle={[s.pad, { gap: 14, flexGrow: 1 }]} keyboardShouldPersistTaps="handled">
-        <Header onBack={onHome} kicker={`${context} · ${results.length} 位跑者 · 手持`} title={`第 ${raceNo} 趟成績`} />
+        <Header
+          onBack={onHome}
+          kicker={`${results.length} 位跑者 · 手持`}
+          title={`第 ${raceNo} 趟成績`}
+          right={
+            onDistanceChange ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={distanceM === null ? '選擇距離' : `距離 ${distanceM} 公尺，點一下修改`}
+                onPress={() => setDistOpen((v) => !v)}
+                style={({ pressed }) => [s.row, styles.distBtn, distanceM === null && { borderColor: C.info }, pressed && { opacity: 0.75 }]}
+              >
+                <Text style={[NUM, { color: distanceM === null ? C.infoText : C.text, fontSize: 17, fontWeight: '700' }]}>{distanceM === null ? '選距離' : distanceLabel(distanceM)}</Text>
+                <Text style={{ color: C.dim, fontSize: 14 }}>{distOpen ? '▴' : '▾'}</Text>
+              </Pressable>
+            ) : (
+              <View style={[s.row, styles.distBtn]}>
+                <Text style={[NUM, { color: C.text, fontSize: 17, fontWeight: '700' }]}>{distanceLabel(distanceM)}</Text>
+              </View>
+            )
+          }
+        />
+        {distOpen && onDistanceChange ? (
+          <View style={{ gap: 10 }}>
+            <Segmented<string>
+              options={DISTANCES}
+              value={customDist ? '自訂' : String(distanceM ?? '')}
+              onChange={(v) => {
+                if (v === '自訂') setCustomDist(true);
+                else {
+                  setCustomDist(false);
+                  onDistanceChange(Number(v));
+                  setDistOpen(false);
+                }
+              }}
+              fmt={(v) => (v === '自訂' ? v : `${v}m`)}
+            />
+            {customDist ? <NumField label="這一趟的距離" value={distanceM ?? 100} onChange={(v) => v > 0 && onDistanceChange(v)} unit="公尺" /> : null}
+          </View>
+        ) : null}
 
         <View style={{ gap: 6 }}>
           <View style={[s.row, { justifyContent: 'space-between' }]}>
@@ -325,7 +409,7 @@ function MultiResults({
             <Text style={{ color: C.dim, fontSize: 13 }}>橫軸是時間，越左邊越早到</Text>
           </View>
           {strip ? (
-            <ScrollView horizontal style={[styles.strip, editing && { borderWidth: 2, borderColor: C.info }]}>
+            <ScrollView horizontal style={[styles.strip, { flexGrow: 0 }, editing && { borderWidth: 2, borderColor: C.info }]}>
               <Pressable
                 disabled={!editing}
                 accessibilityLabel="終點照片，點一下新增跑者"
@@ -406,36 +490,31 @@ function MultiResults({
           {results.map((r) => {
             const m = marks.get(r.id)!;
             const sel = editing && selected === r.id;
+            // 編輯模式整列可點（選取要微調的跑者）；平常只有標記膠囊可點
+            const Row: React.ElementType = editing ? Pressable : View;
             return (
-              <Pressable
+              <Row
                 key={r.id}
-                disabled={!editing}
-                onPress={() => setSelected(r.id)}
-                style={[s.row, { gap: 12, minHeight: 72, borderTopWidth: 1, borderTopColor: C.raised }, sel && { backgroundColor: C.infoBg }]}
+                {...(editing ? { onPress: () => setSelected(r.id), accessibilityRole: 'button', accessibilityState: { selected: sel } } : {})}
+                style={[s.row, { gap: 10, minHeight: 84, borderTopWidth: 1, borderTopColor: C.raised }, sel && { backgroundColor: C.infoBg }]}
               >
-                <Text style={[NUM, { width: 28, color: r.place === 1 ? C.accent : C.dim, fontSize: 20, fontWeight: '700' }]}>{r.place}</Text>
+                <Text style={[NUM, { width: 22, color: r.place === 1 ? C.accent : C.dim, fontSize: 20, fontWeight: '700' }]}>{r.place}</Text>
                 <View style={styles.thumb}>
                   {m.thumbUri ? <Image source={{ uri: m.thumbUri }} style={{ width: 56, height: 56 }} resizeMode="cover" accessibilityLabel="衝線瞬間" /> : <Text style={{ color: C.faint, fontSize: 11 }}>手動</Text>}
                 </View>
-                <View style={{ flex: 1, gap: 2 }}>
-                  <TextInput
-                    defaultValue={m.name ?? ''}
-                    placeholder={`跑者 ${r.place}（點一下取名）`}
-                    placeholderTextColor={C.dim}
-                    onEndEditing={(e) => mutate(() => session.rename(r.id, e.nativeEvent.text.trim()))}
-                    accessibilityLabel={`第 ${r.place} 位的名字`}
-                    style={{ color: C.text, fontSize: 16, fontWeight: '700', padding: 0, minHeight: 28 }}
-                  />
+                <View style={{ flex: 1, gap: 4 }}>
+                  <RunnerPill runner={draft.runner(r.id)} selfNickname={account.nickname} disabled={editing} onPress={() => setPicking(r.id)} />
                   <Text style={[NUM, { color: C.dim, fontSize: 13 }]}>
                     {r.time.toFixed(3)} · {r.place === 1 ? '第一' : `+${(r.time - results[0].time).toFixed(2)}`}
                     {m.auto ? '' : ' · 手動'}
                   </Text>
                 </View>
                 <Text style={[NUM, { color: r.place === 1 ? C.accent : C.text, fontSize: 30, fontWeight: '700' }]}>{r.official.toFixed(2)}</Text>
-              </Pressable>
+              </Row>
             );
           })}
         </View>
+        {results.length ? <SavedBanner /> : null}
         {note ? <Text style={s.note}>{note}</Text> : null}
 
         <View style={{ flex: 1 }} />
@@ -444,6 +523,39 @@ function MultiResults({
           <Btn title="再跑一趟" onPress={onAgain} style={{ flex: 1, minHeight: 64 }} textStyle={{ fontSize: 18, fontWeight: '900' }} />
         </View>
       </ScrollView>
+
+      <PickRunner
+        target={(() => {
+          const r = picking === null ? undefined : results.find((x) => x.id === picking);
+          return r ? { place: r.place, official: r.official, distanceM, current: draft.runner(r.id), thumbUri: marks.get(r.id)?.thumbUri } : null;
+        })()}
+        onClose={() => setPicking(null)}
+        onPick={(runner) => {
+          if (picking !== null) draft.tag(picking, runner);
+          setPicking(null);
+          setTagRev((v) => v + 1);
+        }}
+      />
+    </View>
+  );
+}
+
+/** 成績畫面下方的一行：這一趟存到哪裡了 */
+function SavedBanner() {
+  const { account } = useAccount();
+  let text = '已存到雲端。標記的人會在自己的紀錄裡看到這筆成績。';
+  let warn = false;
+  if (!account.user) text = account.cloudEnabled ? '已存在這支手機。登入後會存到雲端，也能標記給其他用戶。' : '已存在這支手機。';
+  else if (account.sync.state === 'offline') {
+    text = '現在沒有網路。成績先存在手機上，連上網路後會自動上傳。';
+    warn = true;
+  } else if (account.sync.state === 'error') {
+    text = '上傳失敗，成績還在手機上，稍後會自動再試。';
+    warn = true;
+  } else if (account.pending > 0 || account.sync.state === 'syncing') text = '已存在手機，正在上傳到雲端…';
+  return (
+    <View style={{ backgroundColor: warn ? '#3A2A0C' : C.infoBg, borderRadius: 14, paddingVertical: 10, paddingHorizontal: 14 }}>
+      <Text style={{ color: warn ? '#FFE2A6' : '#C5DFF7', fontSize: 14, lineHeight: 21 }}>{text}</Text>
     </View>
   );
 }
@@ -455,5 +567,6 @@ const styles = StyleSheet.create({
   badge: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   strip: { borderRadius: 14, backgroundColor: '#000', borderWidth: 1, borderColor: C.line, overflow: 'hidden' },
   markBadge: { position: 'absolute', top: 6, width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  distBtn: { minHeight: 48, paddingHorizontal: 14, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.card, gap: 6 },
   thumb: { width: 56, height: 56, borderRadius: 10, backgroundColor: C.raised, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
 });

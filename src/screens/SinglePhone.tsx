@@ -79,7 +79,6 @@ export function SinglePhone({ onBack }: { onBack(): void }) {
   const [step, setStep] = useState<'setup' | 'camera'>('setup');
   const [custom, setCustom] = useState(false);
   const compMs = signal === 'sound' ? soundDelay(distance, tempC) : 0;
-  const context = `${distance}m · 單手機 · ${signal === 'sound' ? '槍聲' : '閃光'}`;
 
   if (step === 'setup') {
     return (
@@ -149,7 +148,9 @@ export function SinglePhone({ onBack }: { onBack(): void }) {
         cancel();
         setStep('setup');
       }}
-      context={context}
+      mode="single-phone"
+      signal={signal}
+      distanceM={distance}
       raceNo={raceNo}
       fps={240}
       torch={torch}
