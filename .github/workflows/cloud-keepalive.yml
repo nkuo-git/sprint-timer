@@ -1,0 +1,34 @@
+# Supabase 免費方案的專案一週沒有活動可能會被暫停（暫停後 App 無法登入與同步，要到後台手動恢復）。
+# 每週兩次對資料庫送一個很小的查詢，讓專案保持啟用。cloud.config.json 還沒填時直接略過。
+name: Cloud keep-alive
+
+on:
+  schedule:
+    - cron: '17 3 * * 1,4'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ping database
+        run: |
+          URL=$(jq -r .url cloud.config.json)
+          KEY=$(jq -r .key cloud.config.json)
+          if [ -z "$URL" ] || [ -z "$KEY" ]; then
+            echo "cloud.config.json 還沒設定，略過"
+            exit 0
+          fi
+          # 未登入讀不到任何資料（預期 401/403 或空結果），但請求會到達資料庫，算作活動
+          STATUS=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
+            -H "apikey: $KEY" -H "Authorization: Bearer $KEY" \
+            "$URL/rest/v1/profiles?select=id&limit=1")
+          echo "HTTP $STATUS"
+          case "$STATUS" in
+            2*|401|403) ;;
+            *) echo "雲端專案沒有回應，可能已被暫停：到 Supabase 後台按 Restore" >&2; exit 1 ;;
+          esac

@@ -17,6 +17,16 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npx vitest run
+      # 雲端資料庫的權限規則（誰看得到、改得到哪些成績）：用 runner 內建的 PostgreSQL 實際跑一次
+      - name: Database permission tests
+        run: |
+          sudo systemctl start postgresql.service
+          sudo -u postgres psql -c "alter user postgres password 'postgres'"
+          bash scripts/test-db.sh
+        env:
+          PGHOST: localhost
+          PGUSER: postgres
+          PGPASSWORD: postgres
 
   android-apk:
     needs: test
