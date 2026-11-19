@@ -15,8 +15,8 @@ export function parseBadging(out) {
 
 /** 從 `apksigner verify --print-certs` 的輸出取出每個簽章憑證的 SHA-256 */
 export function parseCerts(out) {
-  // 新舊版 apksigner 的開頭不一樣：「Signer #1 certificate …」或「Signer (minSdkVersion=24, maxSdkVersion=32) certificate …」
-  const found = [...out.matchAll(/^Signer\b.*\bcertificate SHA-256 digest: ([0-9a-f]{64})\s*$/gm)].map((m) => m[1]);
+  // 每個版本的 apksigner 開頭都不一樣（「Signer #1 certificate …」「V2 Signer: certificate …」），所以只認後半段
+  const found = [...out.matchAll(/\bcertificate SHA-256 digest: ([0-9a-f]{64})\b/g)].map((m) => m[1]);
   return [...new Set(found)].sort();
 }
 
