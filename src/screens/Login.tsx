@@ -118,7 +118,8 @@ function Verify({ email, sentAt, resend, resendError, onBack, onDone }: { email:
       await service.verifyCode(email, value);
       onDone();
     } catch (e: any) {
-      setError(e?.message ?? String(e));
+      // 驗證碼錯誤用畫面上固定的說明；其他狀況（沒網路、太頻繁）顯示原因
+      setError(e?.kind === 'invalid' ? '' : (e?.message ?? String(e)));
       setState('wrong');
     }
   };

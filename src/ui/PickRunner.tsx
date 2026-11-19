@@ -29,16 +29,20 @@ export function PickRunner({ target, onPick, onClose }: { target: PickTarget | n
   const signedIn = !!account.user;
   const q = query.trim();
 
+  // 面板每次打開（或換成另一位跑者）時清空搜尋。target 物件每次重畫都是新的，所以用內容當 key，
+  // 不然背景同步造成的重畫會把打到一半的字清掉。
+  const open = !!target;
+  const openKey = target ? `${target.place}|${target.official}` : null;
   useEffect(() => {
-    if (target) {
-      setQuery(target.current?.kind === 'name' ? target.current.name : '');
-      setSearch({ state: 'idle' });
-    }
-  }, [target]);
+    if (!target) return;
+    setQuery(target.current?.kind === 'name' ? target.current.name : '');
+    setSearch({ state: 'idle' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openKey]);
 
   // 停止打字 0.3 秒後搜尋用戶（要登入才能搜尋）
   useEffect(() => {
-    if (!target || !signedIn || !q) {
+    if (!open || !signedIn || !q) {
       setSearch({ state: 'idle' });
       return;
     }
@@ -54,7 +58,7 @@ export function PickRunner({ target, onPick, onClose }: { target: PickTarget | n
       alive = false;
       clearTimeout(id);
     };
-  }, [q, signedIn, target, service]);
+  }, [q, signedIn, open, service]);
 
   if (!target) return null;
   const recent = service.store.data.recent;

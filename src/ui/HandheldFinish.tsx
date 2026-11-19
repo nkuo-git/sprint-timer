@@ -288,7 +288,7 @@ const DISTANCES = ['60', '100', '200', '400', '自訂'];
  * 設計稿「9 多人成績」＋「22 標記跑者」：終點照片 + 每位跑者的衝線畫面與時間，可補人、微調、刪除，
  * 並把每一筆標記給某個人。畫面上每次變動都會存進紀錄（先存手機，有登入就自動上傳）。
  */
-function MultiResults({
+export function MultiResults({
   session,
   version,
   refresh,
@@ -409,7 +409,7 @@ function MultiResults({
             <Text style={{ color: C.dim, fontSize: 13 }}>橫軸是時間，越左邊越早到</Text>
           </View>
           {strip ? (
-            <ScrollView horizontal style={[styles.strip, editing && { borderWidth: 2, borderColor: C.info }]}>
+            <ScrollView horizontal style={[styles.strip, { flexGrow: 0 }, editing && { borderWidth: 2, borderColor: C.info }]}>
               <Pressable
                 disabled={!editing}
                 accessibilityLabel="終點照片，點一下新增跑者"
@@ -490,11 +490,12 @@ function MultiResults({
           {results.map((r) => {
             const m = marks.get(r.id)!;
             const sel = editing && selected === r.id;
+            // 編輯模式整列可點（選取要微調的跑者）；平常只有標記膠囊可點
+            const Row: React.ElementType = editing ? Pressable : View;
             return (
-              <Pressable
+              <Row
                 key={r.id}
-                disabled={!editing}
-                onPress={() => setSelected(r.id)}
+                {...(editing ? { onPress: () => setSelected(r.id), accessibilityRole: 'button', accessibilityState: { selected: sel } } : {})}
                 style={[s.row, { gap: 10, minHeight: 84, borderTopWidth: 1, borderTopColor: C.raised }, sel && { backgroundColor: C.infoBg }]}
               >
                 <Text style={[NUM, { width: 22, color: r.place === 1 ? C.accent : C.dim, fontSize: 20, fontWeight: '700' }]}>{r.place}</Text>
@@ -509,7 +510,7 @@ function MultiResults({
                   </Text>
                 </View>
                 <Text style={[NUM, { color: r.place === 1 ? C.accent : C.text, fontSize: 30, fontWeight: '700' }]}>{r.official.toFixed(2)}</Text>
-              </Pressable>
+              </Row>
             );
           })}
         </View>

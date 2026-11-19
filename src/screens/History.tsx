@@ -70,7 +70,7 @@ export function History({ onBack, onLogin }: { onBack(): void; onLogin(): void }
         {tab === 'mine' ? (
           <>
             {distances.length ? (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ gap: 8 }}>
                 <FilterChip title="全部" on={distance === null} onPress={() => setDistance(null)} />
                 {distances.map((d) => (
                   <FilterChip key={d} title={distanceLabel(d)} on={distance === d} onPress={() => setDistance(d)} />

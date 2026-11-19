@@ -177,3 +177,7 @@ modules/precision-clock/android/.../shared/GunPlayer.kt   手機和手錶共用�
 權限：計時的人可讀寫整趟；被標記的人只讀得到自己的那一筆和那一趟的日期距離；Email 不對外，只能用完整地址查到對應的暱稱。
 
 測試：`test/cloud.test.ts`、`test/records.test.ts`、`test/account.test.ts` 用 `test/fakeCloud.ts`（照 RLS 規則實作的假雲端）；`scripts/test-db.sh` 在真的 PostgreSQL 上驗證 RLS。
+
+畫面（設計稿 16 到 23）：`src/account/AccountContext.tsx`（`useAccount()`）、`src/screens/Login.tsx`（Email 與驗證碼）、`Nickname.tsx`、`Account.tsx`、`History.tsx`、`src/ui/PickRunner.tsx`（選擇跑者面板與標記膠囊）。
+多人成績（`src/ui/HandheldFinish.tsx` 的 `MultiResults`）每次變動都呼叫 `service.saveRace(draft.toRace(...))`；雙手機模式在成績畫面選距離。
+`cloud.config.json` 是空的時候，登入入口不顯示，成績只存在手機。
