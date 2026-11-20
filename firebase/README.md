@@ -36,6 +36,10 @@ App Links 要通過驗證，`firebase/hosting/.well-known/assetlinks.json` 裡�
 - `results/{id}`：一筆成績，帶著那一趟的 `raceId`、`ranAt`、`distanceM`、`mode`。`owner` 是計時的人，
   `runner` 是被標記的帳號（可以是自己），`taggedTo` 只在標記給別人時有值，`runnerName` 是非用戶的名字
 
+- `runs/{id}`：一次長跑（GPS 測距）：`ranAt`、`distanceM`、`durationS`、`targetM`（自由跑是 null）、`completed`、
+  `splitsS`（每公里秒數）、`track`（路線，每段一個 Google encoded polyline 字串，暫停會分段）。只有跑的人自己（`owner`）讀寫得到。
+  路線全部加起來限制 30 萬字元，App 存檔前會先簡化（一般一次跑步幾千到一兩萬字元）。
+
 ## 發佈規則與網頁
 
 改了 `firestore.rules` 或 `firebase/hosting/` 之後要重新發佈：

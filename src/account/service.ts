@@ -1,7 +1,7 @@
 import { CloudClient, isLoginLink, type CloudUser, type FetchLike, type SessionStorage } from '../cloud/client';
 import { cloudConfigured, type CloudConfig } from '../cloud/config';
 import { deleteAccount, fetchMyNickname, nicknameAvailable, registerEmail, saveNickname, searchPeople, untagMe, type Person } from '../cloud/profile';
-import { RecordStore, type Persistence, type RaceInput } from '../records/store';
+import { RecordStore, type Persistence, type RaceInput, type RunInput } from '../records/store';
 import { RecordSync, type SyncStatus } from '../records/sync';
 
 export interface AccountSnapshot {
@@ -20,7 +20,7 @@ export interface AccountSnapshot {
   /** 已登入但還沒取暱稱（要先到取暱稱畫面） */
   needsNickname: boolean;
   sync: SyncStatus;
-  /** 等待上傳的比賽數 */
+  /** 等待上傳的筆數（比賽＋長跑） */
   pending: number;
   /** 手機上的紀錄每變動一次就 +1（列表畫面據此重畫） */
   recordsRev: number;
@@ -233,6 +233,7 @@ export class AccountService {
     this.nicknameKnown = false;
     // 雲端的都刪了，手機上這個帳號的紀錄也一起清掉
     this.store.data.races = this.store.data.races.filter((r) => r.owner !== uid);
+    this.store.data.runs = this.store.data.runs.filter((r) => r.owner !== uid);
     await this.store.clearAccountData(uid);
   }
 
@@ -254,6 +255,17 @@ export class AccountService {
 
   async deleteRace(id: string): Promise<void> {
     await this.store.deleteRace(id);
+    this.scheduleSync();
+  }
+
+  /** 長跑結束時呼叫：先存手機，稍後自動上傳 */
+  async saveRun(run: RunInput): Promise<void> {
+    await this.store.saveRun(run, this.uid);
+    this.scheduleSync();
+  }
+
+  async deleteRun(id: string): Promise<void> {
+    await this.store.deleteRun(id);
     this.scheduleSync();
   }
 

@@ -1,7 +1,7 @@
 import { isOffline, type CloudClient, type Doc, type Write } from '../cloud/client';
 import type { Fields } from '../cloud/values';
 import type { RecordStore } from './store';
-import type { Runner, StoredRace, StoredResult, TaggedResult } from './types';
+import type { Runner, StoredRace, StoredResult, StoredRun, TaggedResult } from './types';
 
 export type SyncMode = 'full' | 'push';
 export type SyncState = 'idle' | 'syncing' | 'offline' | 'error';
@@ -70,6 +70,9 @@ export class RecordSync {
     try {
       await this.push(uid);
       if (mode === 'full') await this.pull(uid);
+      // 長跑排在短跑成績後面：就算長跑這邊出錯，短跑成績也已經同步完了
+      await this.pushRuns(uid);
+      if (mode === 'full') await this.pullRuns(uid);
       await this.store.commit();
       this.set({ state: 'idle', lastOk: this.now() });
     } catch (e: any) {
@@ -104,6 +107,38 @@ export class RecordSync {
       race.owner = uid;
       if (race.rev === rev) race.dirty = false;
     }
+  }
+
+  /** 上傳本機新增或刪除的長跑（含未登入時存的，歸到現在登入的帳號） */
+  private async pushRuns(uid: string) {
+    const todo = this.store.data.runs.filter((r) => r.dirty && (r.owner === null || r.owner === uid));
+    for (const run of todo) {
+      const rev = run.rev;
+      if (run.deleted) {
+        await this.cloud.commit([{ delete: `runs/${run.id}` }]);
+        if (run.rev === rev) this.store.data.runs = this.store.data.runs.filter((r) => r !== run);
+        continue;
+      }
+      await this.cloud.commit([{ set: `runs/${run.id}`, data: runFields(run, uid) }]);
+      run.owner = uid;
+      if (run.rev === rev) run.dirty = false;
+    }
+  }
+
+  private async pullRuns(uid: string) {
+    const docs = await this.cloud.query('runs', [['owner', '==', uid]]);
+    // 登入的帳號在抓資料途中換了：這批資料不是現在這個人的，丟掉
+    if (this.cloud.user?.id !== uid) return;
+    const remote = new Set(docs.map((d) => d.id));
+    for (const d of docs) {
+      const local = this.store.run(d.id);
+      if (local?.dirty) continue;
+      const run = toRun(d, uid);
+      if (local) Object.assign(local, run, { rev: local.rev });
+      else this.store.data.runs.push(run);
+    }
+    // 雲端已經沒有的（在另一支手機刪掉了）本機也拿掉
+    this.store.data.runs = this.store.data.runs.filter((r) => r.owner !== uid || r.dirty || remote.has(r.id));
   }
 
   private async pull(uid: string) {
@@ -161,6 +196,38 @@ export class RecordSync {
     });
     this.store.setTagged(tagged);
   }
+}
+
+/** 一次長跑在雲端的樣子（runs 集合的一份文件）。欄位要和 firestore.rules 的檢查一致。 */
+function runFields(r: StoredRun, uid: string): Fields {
+  return {
+    owner: uid,
+    ranAt: r.ranAt,
+    distanceM: round(r.distanceM, 1),
+    durationS: round(r.durationS, 1),
+    targetM: r.targetM,
+    completed: r.completed,
+    splitsS: r.splitsS.map((s) => round(s, 1)),
+    track: r.track,
+  };
+}
+
+function toRun(d: Doc, uid: string): StoredRun {
+  const x = d.data;
+  const target = num(x.targetM);
+  return {
+    id: d.id,
+    ranAt: isoTime(x.ranAt),
+    distanceM: num(x.distanceM) ?? 0,
+    durationS: num(x.durationS) ?? 0,
+    targetM: target !== null && target > 0 ? target : null,
+    completed: x.completed === true,
+    splitsS: Array.isArray(x.splitsS) ? x.splitsS.map((s) => num(s) ?? 0) : [],
+    track: Array.isArray(x.track) ? x.track.filter((s): s is string => typeof s === 'string') : [],
+    owner: uid,
+    dirty: false,
+    rev: 1,
+  };
 }
 
 /** 一筆成績在雲端的樣子（results 集合的一份文件）。欄位要和 firestore.rules 的檢查一致。 */

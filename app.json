@@ -27,7 +27,20 @@
       }
     },
     "plugins": [
-      ["expo-build-properties", { "ios": { "deploymentTarget": "16.4" }, "android": { "minSdkVersion": 26 } }]
+      ["expo-build-properties", { "ios": { "deploymentTarget": "16.4" }, "android": { "minSdkVersion": 26 } }],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "長跑計時用 GPS 量距離、記錄路線。只在你按下開始之後記錄，結束就停止。",
+          "locationAlwaysAndWhenInUsePermission": "長跑計時用 GPS 量距離、記錄路線。只在你按下開始之後記錄，結束就停止。",
+          "locationAlwaysPermission": "長跑計時用 GPS 量距離、記錄路線。只在你按下開始之後記錄，結束就停止。",
+          "locationFullAccuracyPermission": "長跑要用精確位置才量得準距離",
+          "motionUsagePermission": false,
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": false,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ]
     ]
   }
 }

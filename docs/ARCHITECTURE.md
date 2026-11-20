@@ -193,3 +193,41 @@ modules/precision-clock/android/.../shared/GunPlayer.kt   手機和手錶共用�
 畫面（設計稿 16 到 23）：`src/account/AccountContext.tsx`（`useAccount()`）、`src/screens/Login.tsx`（輸入 Email、等使用者點登入連結，也可以手動貼上連結）、`Nickname.tsx`、`Account.tsx`、`History.tsx`、`src/ui/PickRunner.tsx`（選擇跑者面板與標記膠囊）。
 多人成績（`src/ui/HandheldFinish.tsx` 的 `MultiResults`）每次變動都呼叫 `service.saveRace(draft.toRace(...))`；雙手機模式在成績畫面選距離。
 `cloud.config.json` 是空的時候，登入入口不顯示，成績只存在手機。
+
+## 長跑計時（GPS 測距＋路線）
+手機帶在身上跑，用 GPS 量距離、算配速，並把路線存下來。和短跑的成績分開：首頁和「我的紀錄」都分成「短跑」「長跑」兩個分頁（設計稿 27 到 31）。
+
+### 程式
+```
+src/core/gpsTrack.ts   RunTracker：定位點 → 距離、跑步時間（不含暫停）、每公里分段、目前配速、路線；路線簡化與壓縮（encoded polyline）
+src/run/session.ts     RunSession：準備（等 GPS）→ 跑步 ⇄ 暫停 → 結束（自動存檔）、目標距離自動停錶、每公里語音報時
+src/run/location.ts    手機定位（expo-location）：準備畫面用前景定位，跑步中改用「螢幕關掉也繼續」的定位
+src/run/mapView.ts     地圖：投影、自動縮放、要哪些圖塊、路線 SVG、每公里標記
+src/ui/RouteMap.tsx    地圖元件：CARTO 深色底圖（免費、不用金鑰，資料來自 OpenStreetMap）＋ react-native-svg 畫路線；沒網路時只畫路線
+src/screens/LongRun.tsx、RunSummary.tsx   畫面
+```
+
+### 距離怎麼算
+GPS 每個點都有幾公尺的誤差，直接把相鄰兩點的距離加起來會越加越多（站著不動也會「走」）。所以：
+1. 誤差超過 25m 的點、比每秒 10m 還快的瞬間移動都不用。
+2. 依每個點回報的誤差做平滑（卡爾曼濾波的簡化版：誤差越大越不相信新的點）。
+3. 離上一個計入的位置超過 8m（或誤差的一半）才算一步，站著不動時的抖動不會累積。
+4. 手機回報的速度（都卜勒，很準）低於 0.4m/s 時當作停下來。
+5. 跑到目標距離時，用最後一步內插出剛好到達的時間和位置，每公里分段也一樣內插。
+
+平滑程度和最小步距是用模擬掃出來的平衡點：太平滑彎道會被削短（距離變短），不夠平滑雜訊會讓距離變長。
+模擬 400m 跑道跑 5 公里（定位誤差 3–5m、誤差會慢慢飄移）距離誤差在 1.5% 內；訊號差一倍時在 3% 內。
+
+### 螢幕關掉也繼續
+- Android：前景服務（通知列會出現「長跑計時中」），不需要「一律允許」的定位權限。
+- iOS：背景定位模式（UIBackgroundModes location），「使用 App 期間」的權限就夠，狀態列會顯示定位中。
+- 系統不允許時退回只在前景記錄，畫面會提醒要讓 App 保持在畫面上。
+
+### 存檔與雲端
+跑完自動存在手機（records.json 的 `runs`），登入的話上傳到 Firestore 的 `runs` 集合（只有自己讀得到，規則見 firestore.rules）。
+存了之後不能修改，只能刪除。路線先簡化（偏離原路線 3m 以內的點拿掉）再壓成字串，一次全馬約 1–2 萬字元。
+
+### 已知限制
+- 跑到一半 App 被系統關掉（不是螢幕關掉）的話，這次的紀錄會不見。
+- GPS 在高樓、樹下、隧道會變差；跑道上一圈圈跑時，GPS 距離通常比實際的 400m 多一點或少一點。
+- 地圖底圖需要網路，不能拖曳縮放。

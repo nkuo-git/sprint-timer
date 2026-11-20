@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { CloudClient } from '../src/cloud/client';
 import { saveNickname, untagMe } from '../src/cloud/profile';
-import { personalBests, RecordStore, runnerLabel, uuid, type RaceInput } from '../src/records/store';
+import { decodePolyline, encodePolyline } from '../src/core/gpsTrack';
+import { personalBests, RecordStore, runBests, runnerLabel, uuid, type RaceInput, type RunInput } from '../src/records/store';
 import { RecordSync } from '../src/records/sync';
 import type { Runner, StoredResult } from '../src/records/types';
 import { makeCloud, memoryStorage, type TestCloud } from './testCloud';
@@ -320,5 +321,159 @@ describe('雲端同步', () => {
     await p.sync.sync();
     expect(cloud.requests).toHaveLength(0);
     expect(p.sync.status.state).toBe('idle');
+  });
+});
+
+function longRun(over: Partial<RunInput> = {}): RunInput {
+  return {
+    id: uuid(),
+    ranAt: '2026-11-20T06:42:00.000Z',
+    distanceM: 5000,
+    durationS: 1531.4,
+    targetM: 5000,
+    completed: true,
+    splitsS: [312, 308.2, 298, 310, 303.2],
+    track: [encodePolyline([[25.04776, 121.53185], [25.04881, 121.53291], [25.04990, 121.53402]]), encodePolyline([[25.05, 121.534], [25.051, 121.535]])],
+    ...over,
+  };
+}
+
+describe('長跑紀錄', () => {
+  it('存檔後重開 App 還在，路線可以還原；舊版的紀錄檔（沒有長跑）照樣讀得進來', async () => {
+    const p = await phone(await makeCloud());
+    const r = longRun();
+    await p.store.saveRun(r, null);
+    await p.store.saveRun({ ...r, durationS: 1 }, null);
+    const reopened = new RecordStore({ load: p.file.load, save: (v) => p.file.save(v) });
+    await reopened.load();
+    expect(reopened.runs(null)).toHaveLength(1);
+    expect(reopened.runs(null)[0]).toMatchObject({ distanceM: 5000, durationS: 1531.4, splitsS: r.splitsS });
+    expect(decodePolyline(reopened.runs(null)[0].track[0])).toEqual([[25.04776, 121.53185], [25.04881, 121.53291], [25.0499, 121.53402]]);
+
+    const old = new RecordStore({ load: async () => JSON.stringify({ v: 1, races: [], tagged: [], seenTagged: [], recent: [] }), save: async () => undefined });
+    await old.load();
+    expect(old.runs(null)).toEqual([]);
+    await old.saveRun(longRun(), null);
+    expect(old.runs(null)).toHaveLength(1);
+  });
+
+  it('各目標距離的最佳成績：只算有跑完目標的', () => {
+    const base = { owner: null, dirty: false, rev: 1 };
+    const runs = [
+      { ...longRun({ durationS: 1600 }), ...base },
+      { ...longRun({ durationS: 1531.4 }), ...base },
+      { ...longRun({ durationS: 900, distanceM: 3200, completed: false }), ...base },
+      { ...longRun({ durationS: 700, distanceM: 2500, targetM: null, completed: false }), ...base },
+      { ...longRun({ durationS: 2000, distanceM: 10000, targetM: 10000 }), ...base },
+    ];
+    const best = runBests(runs);
+    expect([...best.keys()].sort((a, b) => a - b)).toEqual([5000, 10000]);
+    expect(best.get(5000)!.durationS).toBe(1531.4);
+  });
+
+  it('沒網路時先存手機，連上後上傳；換新手機登入後路線也回來', async () => {
+    const cloud = await makeCloud();
+    const a = await phone(cloud, 'nick@example.com', 'Nick');
+    cloud.offline = true;
+    const r = longRun();
+    await a.store.saveRun(r, a.uid);
+    await a.sync.sync();
+    expect(a.sync.status.state).toBe('offline');
+    expect(a.store.pendingCount(a.uid)).toBe(1);
+    cloud.offline = false;
+    await a.sync.sync();
+    expect(a.sync.status.state).toBe('idle');
+    expect(a.store.pendingCount(a.uid)).toBe(0);
+    const docs = await cloud.docs('runs');
+    expect(docs).toHaveLength(1);
+    expect(docs[0].data).toMatchObject({ owner: a.uid, distanceM: 5000, durationS: 1531.4, targetM: 5000, completed: true, track: r.track });
+
+    const b = await phone(cloud);
+    await b.login('nick@example.com');
+    await b.sync.sync();
+    const got = b.store.runs(b.client.user!.id);
+    expect(got).toHaveLength(1);
+    expect(got[0]).toMatchObject({ id: r.id, ranAt: r.ranAt, distanceM: 5000, durationS: 1531.4, targetM: 5000, completed: true, splitsS: r.splitsS, track: r.track, dirty: false });
+  });
+
+  it('自由跑（沒有目標距離）也能上傳和還原', async () => {
+    const cloud = await makeCloud();
+    const a = await phone(cloud, 'nick@example.com', 'Nick');
+    await a.store.saveRun(longRun({ targetM: null, completed: false, distanceM: 8361.5, splitsS: [], track: [] }), a.uid);
+    await a.sync.sync();
+    expect(a.sync.status.state).toBe('idle');
+    const b = await phone(cloud);
+    await b.login('nick@example.com');
+    await b.sync.sync();
+    expect(b.store.runs(b.client.user!.id)[0]).toMatchObject({ targetM: null, completed: false, distanceM: 8361.5, splitsS: [], track: [] });
+  });
+
+  it('在一支手機刪掉的長跑，雲端和另一支手機都跟著消失', async () => {
+    const cloud = await makeCloud();
+    const a = await phone(cloud, 'nick@example.com', 'Nick');
+    const r = longRun();
+    await a.store.saveRun(r, a.uid);
+    await a.store.saveRun(longRun({ ranAt: '2026-11-21T06:00:00.000Z' }), a.uid);
+    await a.sync.sync();
+    const b = await phone(cloud);
+    await b.login('nick@example.com');
+    await b.sync.sync();
+    expect(b.store.runs(b.client.user!.id)).toHaveLength(2);
+    await a.store.deleteRun(r.id);
+    expect(a.store.runs(a.uid)).toHaveLength(1);
+    await a.sync.sync();
+    expect(await cloud.docs('runs')).toHaveLength(1);
+    await b.sync.sync();
+    expect(b.store.runs(b.client.user!.id).map((x) => x.id)).not.toContain(r.id);
+  });
+
+  it('未登入時存的長跑，登入後歸到這個帳號並上傳；沒上傳過的可以直接刪掉', async () => {
+    const cloud = await makeCloud();
+    const p = await phone(cloud);
+    const keep = longRun();
+    const drop = longRun();
+    await p.store.saveRun(keep, null);
+    await p.store.saveRun(drop, null);
+    await p.store.deleteRun(drop.id);
+    expect(p.store.data.runs).toHaveLength(1);
+    const uid = await p.login('nick@example.com', 'Nick');
+    await p.sync.sync();
+    expect((await cloud.docs('runs')).map((d) => [d.id, d.data.owner])).toEqual([[keep.id, uid]]);
+    expect(p.store.run(keep.id)).toMatchObject({ owner: uid, dirty: false });
+  });
+
+  it('別人讀不到、改不了、刪不掉我的長跑；格式不對的寫不進去', async () => {
+    const cloud = await makeCloud();
+    const nick = await phone(cloud, 'nick@example.com', 'Nick');
+    const an = await phone(cloud, 'an@example.com', '小安');
+    const r = longRun();
+    await nick.store.saveRun(r, nick.uid);
+    await nick.sync.sync();
+    const mine = (await cloud.docs('runs'))[0].data;
+    const denied = { status: 403 };
+    await expect(an.client.getDoc(`runs/${r.id}`)).rejects.toMatchObject(denied);
+    await expect(an.client.query('runs', [['owner', '==', nick.uid!]])).rejects.toMatchObject(denied);
+    expect(await an.client.query('runs', [['owner', '==', an.uid!]])).toEqual([]);
+    await expect(an.client.commit([{ set: `runs/${r.id}`, data: { ...mine, owner: an.uid } }])).rejects.toMatchObject(denied);
+    await expect(an.client.commit([{ delete: `runs/${r.id}` }])).rejects.toMatchObject(denied);
+    await expect(an.client.commit([{ set: 'runs/forged', data: { ...mine } }])).rejects.toMatchObject(denied);
+    await expect(an.client.commit([{ set: 'runs/bad', data: { ...mine, owner: an.uid, durationS: 'fast' } }])).rejects.toMatchObject(denied);
+    await expect(an.client.commit([{ set: 'runs/bad', data: { ...mine, owner: an.uid, extra: 1 } }])).rejects.toMatchObject(denied);
+    await expect(an.client.commit([{ set: 'runs/bad', data: { ...mine, owner: an.uid, track: ['x'.repeat(300001)] } }])).rejects.toMatchObject(denied);
+    await an.client.commit([{ set: 'runs/ok', data: { ...mine, owner: an.uid } }]);
+    expect(await cloud.docs('runs')).toHaveLength(2);
+  });
+
+  it('登出：已上傳的長跑從手機拿掉，還沒上傳的留著', async () => {
+    const cloud = await makeCloud();
+    const p = await phone(cloud, 'nick@example.com', 'Nick');
+    await p.store.saveRun(longRun(), p.uid);
+    await p.sync.sync();
+    cloud.offline = true;
+    const waiting = longRun({ ranAt: '2026-11-22T06:00:00.000Z' });
+    await p.store.saveRun(waiting, p.uid);
+    await p.sync.sync();
+    await p.store.clearAccountData(p.uid!);
+    expect(p.store.data.runs.map((r) => r.id)).toEqual([waiting.id]);
   });
 });
