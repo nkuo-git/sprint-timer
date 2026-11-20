@@ -178,9 +178,15 @@ describe('帳號流程', () => {
     await a.service.start();
     await a.login('nick@example.com', 'Nick');
     await a.service.saveRace(new RaceDraft('single-phone').toRace(finished([11.2])));
+    await a.service.saveRun({ id: 'run-1', ranAt: '2026-11-20T06:42:00.000Z', distanceM: 5000, durationS: 1531.4, targetM: 5000, completed: true, splitsS: [300], track: ['_p~iF~ps|U'] });
+    expect(a.service.getSnapshot().pending).toBe(2);
     await a.service.syncNow();
+    expect(a.service.getSnapshot().pending).toBe(0);
+    expect(await cloud.docs('runs')).toHaveLength(1);
     await a.service.deleteAccount();
     expect(await cloud.docs('results')).toHaveLength(0);
+    expect(await cloud.docs('runs')).toHaveLength(0);
+    expect(a.service.store.data.runs).toHaveLength(0);
     expect(await cloud.docs('users')).toHaveLength(0);
     expect(await cloud.docs('nicknames')).toHaveLength(0);
     expect(await cloud.docs('emails')).toHaveLength(0);

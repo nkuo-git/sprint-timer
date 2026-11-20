@@ -2,7 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
 import { useAccount } from '../account/AccountContext';
 import { clockLabel, dayLabel, distanceLabel, groupByDay, initial, modeLabel, retag } from '../records/format';
-import { personalBests } from '../records/store';
+import { personalBests, runBests } from '../records/store';
+import { decodePolyline } from '../core/gpsTrack';
+import { averagePace, durationLabel, kmLabel, paceLabel, targetLabel } from '../run/format';
+import { KindTabs, type Kind } from '../ui/KindTabs';
+import { RouteThumb } from '../ui/RouteMap';
+import type { StoredRun } from '../records/types';
 import type { MyResult, StoredRace, StoredResult } from '../records/types';
 import { Avatar, Btn, C, Chip, Header, NUM, s } from '../ui/kit';
 import { PickRunner } from '../ui/PickRunner';
@@ -10,8 +15,8 @@ import { syncSummary } from './Account';
 
 type Tab = 'mine' | 'timed';
 
-/** 設計稿「21 我的紀錄」：我的成績（含別人幫我計時的）／我計時的比賽 */
-export function History({ onBack, onLogin }: { onBack(): void; onLogin(): void }) {
+/** 設計稿「31 我的紀錄」：短跑（我的成績／我計時的比賽）、長跑兩個分頁 */
+export function History({ onBack, onLogin, kind, onKind, openRun }: { onBack(): void; onLogin(): void; kind: Kind; onKind(k: Kind): void; openRun(id: string): void }) {
   const { account, service } = useAccount();
   const uid = account.user?.id ?? null;
   const [tab, setTab] = useState<Tab>('mine');
@@ -33,6 +38,7 @@ export function History({ onBack, onLogin }: { onBack(): void; onLogin(): void }
   const shown = distance === null ? mine : mine.filter((m) => m.distanceM === distance);
   const best = distance !== null ? bests.get(distance) : undefined;
   const sync = syncSummary(account);
+  const runList = useMemo(() => service.store.runs(uid), [service, uid, account.recordsRev]);
 
   const removeTagged = (m: MyResult) =>
     Alert.alert('從我的紀錄移除？', `${m.timedBy?.nickname ?? '對方'}幫你計時的這筆 ${m.official.toFixed(2)} 會從你的紀錄消失，對方那邊仍會保留。`, [
@@ -55,10 +61,13 @@ export function History({ onBack, onLogin }: { onBack(): void; onLogin(): void }
           right={uid ? <Chip dot tone={sync.tone === 'bad' ? 'bad' : sync.tone === 'warn' ? 'neutral' : 'info'} text={account.pending > 0 ? `${account.pending} 筆待上傳` : sync.title.replace('雲端', '')} /> : undefined}
         />
 
-        <View style={[s.row, { gap: 8 }]}>
-          <TabBtn title="我的成績" on={tab === 'mine'} onPress={() => setTab('mine')} />
-          <TabBtn title="我計時的比賽" on={tab === 'timed'} onPress={() => setTab('timed')} />
-        </View>
+        <KindTabs value={kind} onChange={onKind} />
+        {kind === 'sprint' ? (
+          <View accessibilityRole="tablist" style={[s.row, { gap: 20, borderBottomWidth: 1, borderBottomColor: C.raised }]}>
+            <TabBtn title="我的成績" on={tab === 'mine'} onPress={() => setTab('mine')} />
+            <TabBtn title="我計時的比賽" on={tab === 'timed'} onPress={() => setTab('timed')} />
+          </View>
+        ) : null}
 
         {!uid && account.cloudEnabled ? (
           <Pressable accessibilityRole="button" onPress={onLogin} style={({ pressed }) => [{ backgroundColor: C.infoBg, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 14 }, pressed && { opacity: 0.8 }]}>
@@ -67,7 +76,9 @@ export function History({ onBack, onLogin }: { onBack(): void; onLogin(): void }
           </Pressable>
         ) : null}
 
-        {tab === 'mine' ? (
+        {kind === 'long' ? (
+          <LongRuns runs={runList} onOpen={openRun} />
+        ) : tab === 'mine' ? (
           <>
             {distances.length ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ gap: 8 }}>
@@ -192,15 +203,90 @@ export function History({ onBack, onLogin }: { onBack(): void; onLogin(): void }
   );
 }
 
+/** 短跑底下的分頁：底線樣式，和上面的「短跑／長跑」分得出層級 */
 function TabBtn({ title, on, onPress }: { title: string; on: boolean; onPress(): void }) {
   return (
-    <Btn
-      kind={on ? 'primary' : 'ghost'}
-      title={title}
+    <Pressable
+      accessibilityRole="tab"
+      accessibilityState={{ selected: on }}
       onPress={onPress}
-      style={{ flex: 1, borderRadius: 14, borderWidth: 1, borderColor: on ? C.accent : C.line }}
-      textStyle={{ fontSize: 17, fontWeight: '700', color: on ? C.onAccent : C.text }}
-    />
+      style={({ pressed }) => [{ minHeight: 48, justifyContent: 'center', borderBottomWidth: 3, borderBottomColor: on ? C.accent : 'transparent', paddingHorizontal: 2 }, pressed && { opacity: 0.7 }]}
+    >
+      <Text style={{ color: on ? C.text : C.dim, fontSize: 16, fontWeight: '700' }}>{title}</Text>
+    </Pressable>
+  );
+}
+
+/** 長跑分頁：依目標距離篩選、個人最佳、每次一列（路線縮圖） */
+function LongRuns({ runs, onOpen }: { runs: StoredRun[]; onOpen(id: string): void }) {
+  const [filter, setFilter] = useState<number | 'free' | null>(null);
+  const targets = useMemo(() => [...new Set(runs.map((r) => r.targetM).filter((t): t is number => t !== null))].sort((a, b) => a - b), [runs]);
+  const hasFree = runs.some((r) => r.targetM === null);
+  const shown = filter === null ? runs : filter === 'free' ? runs.filter((r) => r.targetM === null) : runs.filter((r) => r.targetM === filter);
+  const bests = useMemo(() => runBests(runs), [runs]);
+  const best = typeof filter === 'number' ? bests.get(filter) : undefined;
+  const bestCount = typeof filter === 'number' ? runs.filter((r) => r.targetM === filter && r.completed).length : 0;
+  return (
+    <>
+      {targets.length + (hasFree ? 1 : 0) > 1 ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ gap: 8 }}>
+          <FilterChip title="全部" on={filter === null} onPress={() => setFilter(null)} />
+          {targets.map((t) => (
+            <FilterChip key={t} title={targetLabel(t)} on={filter === t} onPress={() => setFilter(t)} />
+          ))}
+          {hasFree ? <FilterChip title="自由跑" on={filter === 'free'} onPress={() => setFilter('free')} /> : null}
+        </ScrollView>
+      ) : null}
+
+      {best ? (
+        <View style={[s.card, s.row, { borderRadius: 18, justifyContent: 'space-between' }]}>
+          <View style={{ gap: 4, flex: 1 }}>
+            <View style={{ alignSelf: 'flex-start', backgroundColor: C.warn, borderRadius: 999, paddingVertical: 3, paddingHorizontal: 10 }}>
+              <Text style={{ color: C.onAccent, fontSize: 13, fontWeight: '700' }}>{targetLabel(best.targetM)} 個人最佳</Text>
+            </View>
+            <Text style={{ color: C.dim, fontSize: 13 }}>
+              {dayLabel(best.ranAt).replace('今天 · ', '')} · 配速 {paceLabel(averagePace(best.distanceM, best.durationS))} · 共 {bestCount} 次
+            </Text>
+          </View>
+          <Text style={[NUM, { color: C.accent, fontSize: 48, fontWeight: '700', lineHeight: 52 }]} numberOfLines={1} adjustsFontSizeToFit>
+            {durationLabel(best.durationS)}
+          </Text>
+        </View>
+      ) : null}
+
+      {shown.length === 0 ? <Text style={{ color: C.dim, fontSize: 15, lineHeight: 24, paddingVertical: 12 }}>還沒有長跑紀錄。到首頁的「長跑」分頁按「開始跑」，跑完會自動存在這裡。</Text> : null}
+      <View>
+        {shown.map((r) => (
+          <RunRow key={r.id} run={r} best={r.targetM !== null && bests.get(r.targetM)?.id === r.id && runs.filter((x) => x.targetM === r.targetM && x.completed).length > 1} onPress={() => onOpen(r.id)} />
+        ))}
+      </View>
+    </>
+  );
+}
+
+function RunRow({ run, best, onPress }: { run: StoredRun; best: boolean; onPress(): void }) {
+  const track = useMemo(() => run.track.map(decodePolyline), [run.track]);
+  const when = `${dayLabel(run.ranAt).split(' · ')[0]} ${clockLabel(run.ranAt)}`;
+  return (
+    <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => [s.row, { gap: 12, minHeight: 80, borderTopWidth: 1, borderTopColor: C.raised }, pressed && { opacity: 0.7 }]}>
+      <RouteThumb track={track} />
+      <View style={{ flex: 1, gap: 2 }}>
+        <View style={[s.row, { gap: 8 }]}>
+          <Text style={[NUM, { color: C.text, fontSize: 17, fontWeight: '700' }]}>{kmLabel(run.distanceM)} km</Text>
+          {run.targetM === null ? <Text style={{ color: C.dim, fontSize: 13 }}>自由跑</Text> : !run.completed ? <Text style={{ color: C.dim, fontSize: 13 }}>目標 {targetLabel(run.targetM)} 沒跑完</Text> : null}
+          {best ? (
+            <View style={{ backgroundColor: C.warn, borderRadius: 999, paddingVertical: 1, paddingHorizontal: 8 }}>
+              <Text style={{ color: C.onAccent, fontSize: 12, fontWeight: '700' }}>最佳</Text>
+            </View>
+          ) : null}
+        </View>
+        <Text style={{ color: C.dim, fontSize: 13 }}>
+          {when} · 配速 {paceLabel(averagePace(run.distanceM, run.durationS))}
+          {run.dirty && run.owner !== null ? ' · 待上傳' : ''}
+        </Text>
+      </View>
+      <Text style={[NUM, { color: best ? C.accent : C.text, fontSize: 26, fontWeight: '700' }]}>{durationLabel(run.durationS)}</Text>
+    </Pressable>
   );
 }
 

@@ -10,6 +10,7 @@ rules_version = '2';
 //   emails/{email}     Email → uid，只能「知道完整 Email 才查得到」，不能列出
 //   results/{id}       一筆成績，帶著那一趟比賽的時間、距離。計時的人（owner）可讀寫；
 //                      被標記的人（taggedTo）只讀得到自己那一筆，並且可以把自己的標記拿掉
+//   runs/{id}          一次長跑（GPS 距離、時間、每公里分段、路線）。只有跑的人自己（owner）讀寫得到
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() {
@@ -108,6 +109,29 @@ service cloud.firestore {
         && request.resource.data.runner == null
         && request.resource.data.taggedTo == null
         && (request.resource.data.runnerName == null || (request.resource.data.runnerName is string && request.resource.data.runnerName.size() <= 40));
+    }
+
+    // ───────────── 長跑 ─────────────
+
+    function validRun(d) {
+      return d.keys().hasOnly(['owner', 'ranAt', 'distanceM', 'durationS', 'targetM', 'completed', 'splitsS', 'track'])
+        && d.keys().hasAll(['owner', 'ranAt', 'distanceM', 'durationS', 'targetM', 'completed', 'splitsS', 'track'])
+        && d.owner == me()
+        && d.ranAt is string && d.ranAt.size() >= 10 && d.ranAt.size() <= 40
+        && d.distanceM is number && d.distanceM >= 0 && d.distanceM <= 1000000
+        && d.durationS is number && d.durationS >= 0 && d.durationS <= 1000000
+        && (d.targetM == null || (d.targetM is number && d.targetM > 0 && d.targetM <= 1000000))
+        && d.completed is bool
+        && d.splitsS is list && d.splitsS.size() <= 1000
+        // 路線：最多 200 段（每次暫停分一段），全部加起來 30 萬字元以內（一般一次跑步是幾千到一兩萬字元）
+        && d.track is list && d.track.size() <= 200 && d.track.join('').size() <= 300000;
+    }
+
+    match /runs/{id} {
+      allow read: if signedIn() && resource.data.owner == me();
+      allow create: if signedIn() && validRun(request.resource.data);
+      allow update: if signedIn() && resource.data.owner == me() && validRun(request.resource.data);
+      allow delete: if signedIn() && resource.data.owner == me();
     }
 
     match /results/{id} {

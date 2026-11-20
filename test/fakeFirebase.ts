@@ -188,6 +188,7 @@ export class FakeFirebase {
       const d = this.docs.get(path);
       return !!d && (d.owner === user.uid || d.taggedTo === user.uid);
     }
+    if (collection === 'runs') return this.docs.get(path)?.owner === user.uid;
     return false;
   }
 
@@ -196,6 +197,7 @@ export class FakeFirebase {
     if (collection === 'users') return true;
     // 查詢條件本身要能保證每一筆結果都是自己讀得到的
     if (collection === 'results') return filters.some((f) => f.op === 'EQUAL' && (f.field === 'owner' || f.field === 'taggedTo') && f.value === user.uid);
+    if (collection === 'runs') return filters.some((f) => f.op === 'EQUAL' && f.field === 'owner' && f.value === user.uid);
     return false;
   }
 
@@ -227,6 +229,10 @@ export class FakeFirebase {
         return touched.every((k) => ['runner', 'taggedTo', 'runnerName'].includes(k)) && next.runner === null && next.taggedTo === null && nameOk(next.runnerName);
       }
       return false;
+    }
+    if (collection === 'runs') {
+      if (!next) return !!before && before.owner === me;
+      return (!before || before.owner === me) && validRun(next, me);
     }
     return false;
   }
@@ -265,6 +271,30 @@ function validUser(d: Fields): boolean {
     d.nicknameKey === n.replace(/[A-Z]/g, (c) => c.toLowerCase()) &&
     Array.isArray(d.search) &&
     d.search.length <= 160
+  );
+}
+
+const RUN_KEYS = ['owner', 'ranAt', 'distanceM', 'durationS', 'targetM', 'completed', 'splitsS', 'track'];
+
+function validRun(d: Fields, me: string): boolean {
+  const num = (v: Plain | undefined, min: number, max: number) => typeof v === 'number' && v >= min && v <= max;
+  return (
+    onlyKeys(d, RUN_KEYS) &&
+    RUN_KEYS.every((k) => k in d) &&
+    d.owner === me &&
+    typeof d.ranAt === 'string' &&
+    d.ranAt.length >= 10 &&
+    d.ranAt.length <= 40 &&
+    num(d.distanceM, 0, 1000000) &&
+    num(d.durationS, 0, 1000000) &&
+    (d.targetM === null || (typeof d.targetM === 'number' && d.targetM > 0 && d.targetM <= 1000000)) &&
+    typeof d.completed === 'boolean' &&
+    Array.isArray(d.splitsS) &&
+    d.splitsS.length <= 1000 &&
+    Array.isArray(d.track) &&
+    d.track.length <= 200 &&
+    d.track.every((t) => typeof t === 'string') &&
+    d.track.join('').length <= 300000
   );
 }
 

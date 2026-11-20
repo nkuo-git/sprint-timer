@@ -1,4 +1,4 @@
-import { emptyStore, type MyResult, type RecentPerson, type Runner, type StoreData, type StoredRace, type StoredResult, type TaggedResult } from './types';
+import { emptyStore, type MyResult, type RecentPerson, type Runner, type StoreData, type StoredRace, type StoredResult, type StoredRun, type TaggedResult } from './types';
 
 /** 把整份紀錄存成一個字串的地方（手機上是一個 JSON 檔） */
 export interface Persistence {
@@ -22,6 +22,8 @@ export function uuid(): string {
 
 export type RaceInput = Pick<StoredRace, 'id' | 'ranAt' | 'distanceM' | 'mode' | 'signal'> & { results: StoredResult[] };
 
+export type RunInput = Pick<StoredRun, 'id' | 'ranAt' | 'distanceM' | 'durationS' | 'targetM' | 'completed' | 'splitsS' | 'track'>;
+
 /**
  * 這支手機上的所有紀錄（純邏輯，不含 React 與網路）。
  * 成績一律先存在這裡，同步（sync.ts）再把 dirty 的比賽上傳。
@@ -39,6 +41,8 @@ export class RecordStore {
       const d = raw ? JSON.parse(raw) : null;
       if (d && d.v === 1 && Array.isArray(d.races)) {
         this.data = { ...emptyStore(), ...d };
+        // 長跑功能之前的版本存的檔案沒有這一項
+        if (!Array.isArray(this.data.runs)) this.data.runs = [];
       }
     } catch {
       // 檔案壞掉就從空的開始；雲端有的之後會同步回來
@@ -103,9 +107,37 @@ export class RecordStore {
     return this.commit();
   }
 
-  /** 等待上傳的比賽數（這個帳號的，加上未登入時存的） */
+  /** 等待上傳的筆數：比賽加上長跑（這個帳號的，加上未登入時存的） */
   pendingCount(uid: string | null): number {
-    return this.data.races.filter((r) => r.dirty && (r.owner === null || r.owner === uid)).length;
+    const mine = (r: { dirty: boolean; owner: string | null }) => r.dirty && (r.owner === null || r.owner === uid);
+    return this.data.races.filter(mine).length + this.data.runs.filter(mine).length;
+  }
+
+  // ───────────── 長跑 ─────────────
+
+  run(id: string): StoredRun | undefined {
+    return this.data.runs.find((r) => r.id === id);
+  }
+
+  /** 這支手機上看得到的長跑（新的在前）：這個帳號的，加上未登入時存的 */
+  runs(uid: string | null): StoredRun[] {
+    return this.data.runs.filter((r) => !r.deleted && (r.owner === null || r.owner === uid)).sort((a, b) => b.ranAt.localeCompare(a.ranAt));
+  }
+
+  /** 存一次長跑。同一個 id 已經存過就不再存（長跑存了之後不會改） */
+  saveRun(input: RunInput, owner: string | null): Promise<void> {
+    if (this.run(input.id)) return Promise.resolve();
+    this.data.runs.push({ ...input, splitsS: [...input.splitsS], track: [...input.track], owner, dirty: true, rev: 1 });
+    return this.commit();
+  }
+
+  deleteRun(id: string): Promise<void> {
+    const r = this.run(id);
+    if (!r) return Promise.resolve();
+    // 和比賽一樣：從沒上傳過的直接拿掉，上傳過的留下刪除記號等同步
+    if (r.owner === null) this.data.runs = this.data.runs.filter((x) => x.id !== id);
+    else Object.assign(r, { deleted: true, dirty: true, rev: r.rev + 1 });
+    return this.commit();
   }
 
   // ───────────── 最近一起跑的人 ─────────────
@@ -189,6 +221,7 @@ export class RecordStore {
    */
   clearAccountData(uid: string): Promise<void> {
     this.data.races = this.data.races.filter((r) => !(r.owner === uid && !r.dirty));
+    this.data.runs = this.data.runs.filter((r) => !(r.owner === uid && !r.dirty));
     this.data.tagged = [];
     this.data.seenTagged = [];
     this.data.recent = [];
@@ -204,6 +237,17 @@ export function personalBests(results: MyResult[]): Map<number, MyResult> {
     if (r.distanceM === null || r.falseStart) continue;
     const b = best.get(r.distanceM);
     if (!b || r.time < b.time) best.set(r.distanceM, r);
+  }
+  return best;
+}
+
+/** 各目標距離的最佳長跑成績（有跑完目標的才算）。key 是目標距離（公尺） */
+export function runBests(runs: StoredRun[]): Map<number, StoredRun> {
+  const best = new Map<number, StoredRun>();
+  for (const r of runs) {
+    if (r.targetM === null || !r.completed || r.deleted) continue;
+    const b = best.get(r.targetM);
+    if (!b || r.durationS < b.durationS) best.set(r.targetM, r);
   }
   return best;
 }

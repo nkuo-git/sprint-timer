@@ -131,9 +131,11 @@ export async function deleteAccount(cloud: CloudClient): Promise<void> {
   const chunks = async (writes: Write[]) => {
     for (let i = 0; i < writes.length; i += WRITE_CHUNK) await cloud.commit(writes.slice(i, i + WRITE_CHUNK));
   };
-  // 1. 我計時的成績全部刪掉
+  // 1. 我計時的成績、我的長跑紀錄全部刪掉
   const owned = await cloud.query('results', [['owner', '==', user.id]]);
   await chunks(owned.map((d) => ({ delete: `results/${d.id}` })));
+  const runs = await cloud.query('runs', [['owner', '==', user.id]]);
+  await chunks(runs.map((d) => ({ delete: `runs/${d.id}` })));
   // 2. 別人標記給我的：解除連結，對方那邊留下我的暱稱
   const me = await cloud.getDoc(`users/${user.id}`);
   const nickname = typeof me?.data.nickname === 'string' ? me.data.nickname : null;
