@@ -131,13 +131,14 @@ wear/core/   純 Kotlin，有單元測試
   StartServer.kt     UDP：回 pong（時鐘 server）、記住終點位址、重送
   RaceController.kt  一趟的流程：倒數 → 各就位 → 預備 → 鳴槍 → 等成績
   StartSequence.kt   口令排程（同 src/core/startSequence.ts）
+  Nav.kt             該顯示哪個畫面、往右滑回到哪裡（首頁 → 起點機 → 口令 → 成績；設定；更新）
 wear/app/    手錶 App
   WifiLink.kt        要求系統打開 Wi-Fi，並把 UDP socket 綁在 Wi-Fi 上
   WatchGun.kt        鳴槍（共用手機的 GunPlayer）
   Speech.kt          語音口令（系統語音合成，沒有該語言時改用提示音）
   Updater.kt         App 內更新：查最新 Release、下載、交給系統安裝
   PhoneLinkService.kt 接配對手機 App 的要求：回報版本、接收手機傳來的新版並安裝
-  Ui.kt              畫面（設計稿：Claude Design 畫面 10–15、26）
+  Ui.kt              畫面（設計稿：Claude Design 畫面 10–15、26、32–34）
 modules/precision-clock/android/.../shared/GunPlayer.kt   手機和手錶共用的鳴槍與發聲時刻量測
 ```
 
@@ -160,6 +161,9 @@ modules/precision-clock/android/.../shared/GunPlayer.kt   手機和手錶共用�
     檔案由系統直接寫進手錶 App 的快取，收完後檢查（大小、是這個 App、比現在新）再用 `PackageInstaller` 安裝。
   - 成功與否以「手錶回報的版本變成新版」為準（安裝成功時手錶 App 會被系統關掉）；手錶只在失敗或需要確認時主動回報。
   - 前提：手機和手錶的安裝檔套件名、簽章都相同。CI 用手機 App 的金鑰簽手錶版，並在發佈前用 `scripts/check-apk-pair.mjs` 檢查。
+- **首頁與設定**（設計稿 32–34）：打開 App 先到首頁，「起點機」進上面的流程，「設定」進設定頁（待命畫面也進得去）。
+  設定頁是上下兩頁：口令語言與倒數秒數；往下捲（或轉錶冠）是手錶 App 的版本、build 編號、是不是最新版。
+  「檢查更新」會重查一次，有新版按「更新」直接接到 App 內更新的下載畫面；有新版時首頁的「設定」會亮藍點。
 - **沒有的功能**：手錶沒有相機，所以沒有反應時間與搶跑判定。
 - **Apple Watch**：未做。需要 Apple Developer 帳號才能裝到手錶；而且 watchOS 只允許音訊串流類 App 使用底層網路（UDP），
   一般 App 只能透過配對的 iPhone 中轉（WatchConnectivity），延遲大又不穩，不適合做時鐘同步。

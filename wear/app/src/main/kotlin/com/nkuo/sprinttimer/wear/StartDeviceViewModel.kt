@@ -34,6 +34,18 @@ sealed interface UpdateUi {
   data class Failed(val release: ReleaseInfo, val installBlocked: Boolean) : UpdateUi
 }
 
+/** 設定頁「版本」那一段顯示的狀態（畫面 34）：目前是不是最新版 */
+sealed interface VersionCheck {
+  data object Checking : VersionCheck
+
+  data object Latest : VersionCheck
+
+  data class New(val release: ReleaseInfo) : VersionCheck
+
+  /** 查不到（多半是沒有網路） */
+  data object Failed : VersionCheck
+}
+
 /**
  * 手錶起點機的全部狀態：Wi-Fi、和終點手機的連線、一趟的流程、設定。畫面只讀這裡的狀態、呼叫這裡的動作。
  */
@@ -106,6 +118,13 @@ class StartDeviceViewModel(app: Application) : AndroidViewModel(app) {
   /** 目前安裝的顯示版本，例如 "0.6" */
   val currentVersion: String get() = updater.currentVersion
 
+  /** 目前安裝的 build 編號（versionCode） */
+  val currentBuild: Int get() = updater.currentBuild
+
+  /** 有沒有比現在新的版本。設定頁的版本段落和首頁「設定」上的藍點看這個。開 App 時就會去查，所以一開始是檢查中。 */
+  var versionCheck by mutableStateOf<VersionCheck>(VersionCheck.Checking)
+    private set
+
   private var savedVolume: Int? = null
   private var updateChecked = false
   private var updateChecking = false
@@ -118,10 +137,14 @@ class StartDeviceViewModel(app: Application) : AndroidViewModel(app) {
     checkForUpdate()
   }
 
-  /** 查有沒有新版。每次開 App 查到一次結果為止；沒網路就安靜地略過。 */
-  private fun checkForUpdate() {
-    if (updateChecked || updateChecking) return
+  /**
+   * 查有沒有新版。自動的（開 App、剛連上 Wi-Fi）每次開 App 查到一次結果為止，查到新版會先問要不要更新（畫面 15）。
+   * [manual]：在設定頁按「檢查更新」，每按一次都重查，結果只顯示在設定頁，不另外跳出來。
+   */
+  fun checkForUpdate(manual: Boolean = false) {
+    if (updateChecking || (!manual && updateChecked)) return
     updateChecking = true
+    versionCheck = VersionCheck.Checking
     thread(name = "update-check", isDaemon = true) {
       val result = try {
         Result.success(updater.check())
@@ -133,17 +156,22 @@ class StartDeviceViewModel(app: Application) : AndroidViewModel(app) {
         if (result.isSuccess) {
           updateChecked = true
           val rel = result.getOrNull()
-          if (rel != null && update == UpdateUi.None) update = UpdateUi.Offer(rel)
+          versionCheck = if (rel != null) VersionCheck.New(rel) else VersionCheck.Latest
+          if (!manual && rel != null && update == UpdateUi.None) update = UpdateUi.Offer(rel)
+        } else {
+          versionCheck = VersionCheck.Failed
         }
       }
     }
   }
 
-  /** 按「更新」或「再試一次」：下載並安裝 */
-  fun startUpdate() {
+  /** 按「更新」或「再試一次」：下載並安裝。[release]：從設定頁的版本段落直接更新到這一版。 */
+  fun startUpdate(release: ReleaseInfo? = null) {
     val rel = when (val u = update) {
       is UpdateUi.Offer -> u.release
       is UpdateUi.Failed -> u.release
+      UpdateUi.None -> release ?: return
+      // 已經在下載或安裝了
       else -> return
     }
     update = UpdateUi.Downloading(rel, 0f)

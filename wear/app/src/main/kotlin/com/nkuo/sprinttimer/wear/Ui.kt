@@ -4,10 +4,12 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +22,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.VerticalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
@@ -32,18 +37,22 @@ import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -59,17 +68,24 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.wear.compose.material.SwipeToDismissBox
+import com.nkuo.sprinttimer.wear.core.BackAction
+import com.nkuo.sprinttimer.wear.core.NavInput
 import com.nkuo.sprinttimer.wear.core.Phase
+import com.nkuo.sprinttimer.wear.core.ReleaseInfo
 import com.nkuo.sprinttimer.wear.core.StartState
+import com.nkuo.sprinttimer.wear.core.UpdateStage
+import com.nkuo.sprinttimer.wear.core.WatchScreen
 import com.nkuo.sprinttimer.wear.core.formatOfficial
 import com.nkuo.sprinttimer.wear.core.formatRaw
 import com.nkuo.sprinttimer.wear.core.formatSize
+import com.nkuo.sprinttimer.wear.core.navigate
 import kotlin.math.ceil
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
- * 手錶起點機的畫面。
- * 設計稿：Claude Design「短跑計時 App 介面」畫面 10–15、26 https://claude.ai/artifact/UXK5fTNCPcaz6D5CiXfARX
+ * 手錶 App 的畫面：首頁、起點機、設定。
+ * 設計稿：Claude Design「短跑計時 App 介面」畫面 10–15、26、32–34 https://claude.ai/artifact/UXK5fTNCPcaz6D5CiXfARX
  * 設計稿把 192dp 的圓形錶面畫成 384px（2 倍），這裡所有尺寸都直接寫設計稿的 px，再依實際錶面大小縮放。
  * 顏色沿用手機版（src/ui/kit.tsx），只有底色改純黑（手錶省電）。
  */
@@ -159,6 +175,7 @@ private fun PillButton(
   weight: FontWeight,
   modifier: Modifier = Modifier,
   border: Color? = null,
+  enabled: Boolean = true,
 ) {
   val shape = RoundedCornerShape(percent = 50)
   Box(
@@ -167,7 +184,7 @@ private fun PillButton(
       .clip(shape)
       .background(bg)
       .then(if (border != null) Modifier.border(px(2), border, shape) else Modifier)
-      .clickable(role = Role.Button, onClick = onClick)
+      .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
       .padding(horizontal = px(padH)),
     contentAlignment = Alignment.Center,
   ) {
@@ -208,69 +225,121 @@ private fun Face(padH: Number = 40, padV: Number = 40, gap: Number = 8, content:
   }
 }
 
-private enum class Screen { NO_SPEAKER, NO_WIFI, CONNECT, READY, SETTINGS, SEQUENCE, RESULT, UPDATE, PHONE_UPDATE }
-
 @Composable
 fun App(vm: StartDeviceViewModel, onExit: () -> Unit) {
   val cfg = LocalConfiguration.current
   val unit = minOf(cfg.screenWidthDp, cfg.screenHeightDp) / 192f
+  // 在首頁按了「起點機」
+  var inStart by rememberSaveable { mutableStateOf(false) }
   var showSettings by rememberSaveable { mutableStateOf(false) }
   val race = vm.race
   val update = vm.update
   val phoneUpdate = vm.phoneUpdate
 
-  // 待命時最底下那一層：還沒連線顯示 IP，連上了（或選了只發令）顯示開始鈕
-  val waiting = if (vm.ip == null) Screen.NO_WIFI else Screen.CONNECT
-  val home = if (race.connected || vm.solo) Screen.READY else waiting
-  val screen = when {
-    !vm.hasSpeaker -> Screen.NO_SPEAKER
-    race.phase == Phase.COUNTDOWN || race.phase == Phase.MARKS || race.phase == Phase.SET || race.phase == Phase.GUN -> Screen.SEQUENCE
-    race.phase == Phase.RESULT || race.phase == Phase.NO_RESULT -> Screen.RESULT
-    // 更新只在待命時出現，不打斷進行中的一趟
-    phoneUpdate != PhoneUpdate.State.None -> Screen.PHONE_UPDATE
-    update != UpdateUi.None -> Screen.UPDATE
-    showSettings -> Screen.SETTINGS
-    else -> home
-  }
-  // 下載和安裝途中不能滑掉
-  val updateBusy = update is UpdateUi.Downloading || update is UpdateUi.Installing
-  // 往右滑會回到哪一個畫面；null = 離開 App
-  val behind = when {
-    screen == Screen.UPDATE -> if (updateBusy) null else home
-    screen == Screen.SETTINGS -> home
-    screen == Screen.READY && vm.solo && !race.connected -> waiting
-    else -> null
-  }
+  // 該顯示哪個畫面、往右滑回到哪裡：wear/core 的 navigate()（有單元測試）
+  val nav = navigate(
+    NavInput(
+      hasSpeaker = vm.hasSpeaker,
+      hasWifi = vm.ip != null,
+      connected = race.connected,
+      solo = vm.solo,
+      phase = race.phase,
+      inStart = inStart,
+      showSettings = showSettings,
+      update = when (update) {
+        UpdateUi.None -> UpdateStage.NONE
+        is UpdateUi.Offer, is UpdateUi.Failed -> UpdateStage.PROMPT
+        is UpdateUi.Downloading, is UpdateUi.Installing -> UpdateStage.BUSY
+      },
+      phoneUpdate = phoneUpdate != PhoneUpdate.State.None,
+    ),
+  )
 
   CompositionLocalProvider(LocalUnit provides unit) {
     SwipeToDismissBox(
       onDismissed = {
-        when {
-          screen == Screen.UPDATE -> vm.dismissUpdate()
-          screen == Screen.SETTINGS -> showSettings = false
-          behind != null -> vm.solo = false
-          else -> onExit()
+        when (nav.back) {
+          BackAction.DISMISS_UPDATE -> vm.dismissUpdate()
+          BackAction.CLOSE_SETTINGS -> showSettings = false
+          BackAction.LEAVE_SOLO -> vm.solo = false
+          BackAction.LEAVE_START -> inStart = false
+          BackAction.EXIT -> onExit()
         }
       },
       modifier = Modifier.fillMaxSize().background(C.bg),
       backgroundScrimColor = C.bg,
       contentScrimColor = C.bg,
-      backgroundKey = behind ?: "exit",
-      contentKey = screen,
-      // 口令進行中不能滑掉，避免誤觸
-      hasBackground = screen != Screen.SEQUENCE && screen != Screen.PHONE_UPDATE && !(screen == Screen.UPDATE && updateBusy),
+      backgroundKey = nav.behind ?: "exit",
+      contentKey = nav.screen,
+      hasBackground = nav.canSwipe,
     ) { isBackground ->
-      when (if (isBackground) behind else screen) {
-        Screen.NO_SPEAKER -> NoSpeakerScreen()
-        Screen.NO_WIFI -> NoWifiScreen()
-        Screen.CONNECT -> ConnectScreen(ip = vm.ip ?: "", onSolo = { vm.solo = true })
-        Screen.READY -> ReadyScreen(race, onStart = vm::start, onSettings = { showSettings = true })
-        Screen.SETTINGS -> SettingsScreen(vm)
-        Screen.SEQUENCE -> SequenceScreen(race, now = vm::now, onCancel = vm::cancel, onStopWaiting = vm::next)
-        Screen.RESULT -> ResultScreen(race, onAgain = vm::next)
-        Screen.UPDATE -> UpdateScreen(update, vm.currentVersion, onUpdate = vm::startUpdate, onLater = vm::dismissUpdate)
-        Screen.PHONE_UPDATE -> PhoneUpdateScreen(phoneUpdate, fraction = vm::phoneReceiveFraction, onStalled = vm::dismissPhoneUpdate)
+      when (if (isBackground) nav.behind else nav.screen) {
+        WatchScreen.HOME -> HomeScreen(
+          hasUpdate = vm.versionCheck is VersionCheck.New,
+          onStartDevice = { inStart = true },
+          onSettings = { showSettings = true },
+        )
+        WatchScreen.NO_SPEAKER -> NoSpeakerScreen()
+        WatchScreen.NO_WIFI -> NoWifiScreen()
+        WatchScreen.CONNECT -> ConnectScreen(ip = vm.ip ?: "", onSolo = { vm.solo = true })
+        WatchScreen.READY -> ReadyScreen(race, onStart = vm::start, onSettings = { showSettings = true })
+        WatchScreen.SETTINGS -> SettingsScreen(vm)
+        WatchScreen.SEQUENCE -> SequenceScreen(race, now = vm::now, onCancel = vm::cancel, onStopWaiting = vm::next)
+        WatchScreen.RESULT -> ResultScreen(race, onAgain = vm::next)
+        WatchScreen.UPDATE -> UpdateScreen(update, vm.currentVersion, onUpdate = { vm.startUpdate() }, onLater = vm::dismissUpdate)
+        WatchScreen.PHONE_UPDATE -> PhoneUpdateScreen(phoneUpdate, fraction = vm::phoneReceiveFraction, onStalled = vm::dismissPhoneUpdate)
         null -> Box(Modifier.fillMaxSize().background(C.bg))
+      }
+    }
+  }
+}
+
+// ---------- 畫面 32：首頁 ----------
+
+@Composable
+private fun HomeScreen(hasUpdate: Boolean, onStartDevice: () -> Unit, onSettings: () -> Unit) {
+  Face(gap = 12) {
+    Txt("跑步計時", 22, C.dim)
+    Column(
+      modifier = Modifier
+        .width(px(296))
+        .defaultMinSize(minHeight = px(120))
+        .clip(RoundedCornerShape(percent = 50))
+        .background(C.accent)
+        .clickable(role = Role.Button, onClick = onStartDevice),
+      verticalArrangement = Arrangement.spacedBy(px(2), Alignment.CenterVertically),
+      horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+      Txt("起點機", 42, C.onAccent, FontWeight.Black, lineHeight = 1.15f, maxLines = 1)
+      Txt("發口令 · 鳴槍", 20, C.onAccent, FontWeight.Bold, maxLines = 1)
+    }
+    Box {
+      val shape = RoundedCornerShape(percent = 50)
+      Row(
+        modifier = Modifier
+          .defaultMinSize(minHeight = px(72))
+          .clip(shape)
+          .background(C.card)
+          .border(px(2), C.line, shape)
+          .clickable(role = Role.Button, onClick = onSettings)
+          .padding(horizontal = px(34)),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(px(10)),
+      ) {
+        Icon(R.drawable.ic_tune, 28, C.soft)
+        Txt("設定", 24, C.text, FontWeight.Bold, maxLines = 1)
+      }
+      // 有新版本：設定頁往下捲可以更新
+      if (hasUpdate) {
+        Box(
+          Modifier
+            .align(Alignment.TopEnd)
+            .padding(top = px(12), end = px(14))
+            .size(px(14))
+            .clip(CircleShape)
+            .background(C.info)
+            .semantics { contentDescription = "有新版本" },
+        )
       }
     }
   }
@@ -591,28 +660,143 @@ private fun RingFace(fraction: Float, content: @Composable () -> Unit) {
   }
 }
 
-// ---------- 畫面 14：設定 ----------
+// ---------- 畫面 33、34：設定（上下兩頁：口令設定、版本） ----------
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SettingsScreen(vm: StartDeviceViewModel) {
-  Face(padV = 36, gap = 6) {
-    Txt("口令語言", 22, C.dim)
-    Row(horizontalArrangement = Arrangement.spacedBy(px(8))) {
-      LangButton("中文", vm.lang == CommandLang.ZH) { vm.chooseLang(CommandLang.ZH) }
-      LangButton("English", vm.lang == CommandLang.EN) { vm.chooseLang(CommandLang.EN) }
+  val pager = rememberPagerState(pageCount = { 2 })
+  val scope = rememberCoroutineScope()
+  val focus = remember { FocusRequester() }
+  LaunchedEffect(Unit) {
+    try {
+      focus.requestFocus()
+    } catch (e: IllegalStateException) {
+      // 拿不到焦點只是不能用錶冠捲，手指還是可以滑
     }
-    Spacer(Modifier.height(px(4)))
-    Txt("按開始後倒數", 22, C.dim)
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(px(14))) {
-      StepButton(R.drawable.ic_minus, "減少") { vm.changeLeadIn(-1) }
-      Row(modifier = Modifier.widthIn(min = px(96)), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.Center) {
-        Txt(vm.leadInSec.toString(), 48, C.text, FontWeight.Bold, tabular = true, maxLines = 1)
-        Txt(" 秒", 24, C.soft, modifier = Modifier.padding(bottom = px(8)))
+  }
+  Box(
+    Modifier
+      .fillMaxSize()
+      .background(C.bg)
+      // 轉錶冠：往下轉到版本頁，往上轉回口令設定
+      .onRotaryScrollEvent { e ->
+        val target = if (e.verticalScrollPixels > 0) 1 else 0
+        if (target != pager.targetPage) scope.launch { pager.animateScrollToPage(target) }
+        true
       }
-      StepButton(R.drawable.ic_plus, "增加") { vm.changeLeadIn(1) }
+      .focusRequester(focus)
+      .focusable(),
+  ) {
+    VerticalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
+      if (page == 0) {
+        CommandSettingsPage(vm, onMore = { scope.launch { pager.animateScrollToPage(1) } })
+      } else {
+        VersionPage(
+          version = vm.currentVersion,
+          build = vm.currentBuild,
+          check = vm.versionCheck,
+          onCheck = { vm.checkForUpdate(manual = true) },
+          onUpdate = { rel -> vm.startUpdate(rel) },
+        )
+      }
     }
-    Spacer(Modifier.height(px(2)))
-    Txt("預備→鳴槍 隨機 1.6–2.6 秒", 20, C.dim)
+    ScrollArc(pager)
+  }
+}
+
+/** 右邊的捲動位置弧線：上半＝口令設定，下半＝版本 */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ScrollArc(pager: PagerState) {
+  val strokePx = with(LocalDensity.current) { px(6).toPx() }
+  Canvas(Modifier.fillMaxSize()) {
+    val r = size.minDimension / 2 * (180f / 192f)
+    val topLeft = Offset(center.x - r, center.y - r)
+    val arcSize = Size(r * 2, r * 2)
+    val pos = (pager.currentPage + pager.currentPageOffsetFraction).coerceIn(0f, 1f)
+    drawArc(C.raised, startAngle = -25f, sweepAngle = 50f, useCenter = false, topLeft = topLeft, size = arcSize, style = Stroke(width = strokePx, cap = StrokeCap.Round))
+    drawArc(C.soft, startAngle = -25f + 25f * pos, sweepAngle = 25f, useCenter = false, topLeft = topLeft, size = arcSize, style = Stroke(width = strokePx, cap = StrokeCap.Round))
+  }
+}
+
+/** 畫面 33：口令語言、倒數秒數（原本的畫面 14），最下面提示往下還有版本 */
+@Composable
+private fun CommandSettingsPage(vm: StartDeviceViewModel, onMore: () -> Unit) {
+  Box(Modifier.fillMaxSize().background(C.bg)) {
+    Column(
+      modifier = Modifier.fillMaxSize().padding(start = px(40), end = px(40), top = px(24), bottom = px(52)),
+      verticalArrangement = Arrangement.spacedBy(px(6), Alignment.CenterVertically),
+      horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+      Txt("口令語言", 22, C.dim)
+      Row(horizontalArrangement = Arrangement.spacedBy(px(8))) {
+        LangButton("中文", vm.lang == CommandLang.ZH) { vm.chooseLang(CommandLang.ZH) }
+        LangButton("English", vm.lang == CommandLang.EN) { vm.chooseLang(CommandLang.EN) }
+      }
+      Spacer(Modifier.height(px(4)))
+      Txt("按開始後倒數", 22, C.dim)
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(px(14))) {
+        StepButton(R.drawable.ic_minus, "減少") { vm.changeLeadIn(-1) }
+        Row(modifier = Modifier.widthIn(min = px(96)), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.Center) {
+          Txt(vm.leadInSec.toString(), 48, C.text, FontWeight.Bold, tabular = true, maxLines = 1)
+          Txt(" 秒", 24, C.soft, modifier = Modifier.padding(bottom = px(8)))
+        }
+        StepButton(R.drawable.ic_plus, "增加") { vm.changeLeadIn(1) }
+      }
+      Spacer(Modifier.height(px(2)))
+      Txt("預備→鳴槍 隨機 1.6–2.6 秒", 20, C.dim)
+    }
+    Column(
+      modifier = Modifier
+        .align(Alignment.BottomCenter)
+        .padding(bottom = px(8))
+        .clickable(role = Role.Button, onClick = onMore)
+        .padding(horizontal = px(24)),
+      horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+      Txt("版本", 18, C.dim, maxLines = 1)
+      Icon(R.drawable.ic_chevron_down, 20, C.dim)
+    }
+  }
+}
+
+/** 畫面 34：手錶 App 的版本、是不是最新版 */
+@Composable
+private fun VersionPage(version: String, build: Int, check: VersionCheck, onCheck: () -> Unit, onUpdate: (ReleaseInfo) -> Unit) {
+  Face(gap = 2) {
+    Txt("手錶 App 版本", 22, C.dim)
+    Txt("v$version", 68, C.text, FontWeight.Bold, tabular = true, lineHeight = 1.1f, maxLines = 1)
+    Txt("build $build", 20, C.dim, FontWeight.Medium, tabular = true, maxLines = 1)
+    Spacer(Modifier.height(px(6)))
+    when (check) {
+      VersionCheck.Latest -> {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(px(8))) {
+          Icon(R.drawable.ic_check, 24, C.soft)
+          Txt("已是最新版本", 22, C.soft, maxLines = 1)
+        }
+        Spacer(Modifier.height(px(8)))
+        QuietButton("檢查更新", onCheck, padH = 32)
+      }
+      is VersionCheck.New -> {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(px(8))) {
+          Box(Modifier.size(px(10)).clip(CircleShape).background(C.info))
+          Txt("有新版 v${check.release.version}", 22, C.infoText, FontWeight.Medium, maxLines = 1)
+        }
+        Spacer(Modifier.height(px(8)))
+        PrimaryButton("更新", { onUpdate(check.release) }, minHeight = 72, padH = 48, textSize = 26)
+      }
+      VersionCheck.Checking -> {
+        Txt("檢查中…", 22, C.soft, maxLines = 1)
+        Spacer(Modifier.height(px(8)))
+        PillButton("檢查更新", {}, C.bg, C.dim, 72, 32, 24, FontWeight.Bold, border = C.line, enabled = false)
+      }
+      VersionCheck.Failed -> {
+        Txt("連不上網路，沒辦法檢查", 22, C.warn, maxLines = 1)
+        Spacer(Modifier.height(px(8)))
+        QuietButton("再試一次", onCheck, padH = 32)
+      }
+    }
   }
 }
 
